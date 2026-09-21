@@ -111,6 +111,11 @@ class MujocoBackend:
                       scale="0.001 0.001 0.001")
 
         stand_xyz, stand_rpy = origin("camera_stand_joint")
+        # In the reverse-X view the official stand is low and to the right.
+        # Move it 5 cm along each of the wrist-local left/up axes while keeping
+        # the official fixed-joint orientation and the prior orientation fix.
+        stand_xyz[1] += 0.05
+        stand_xyz[2] += 0.05
         # The upstream URDF mount is mirrored relative to the MuJoCo wrist
         # convention. Apply the requested local CCW Z quarter-turn followed by
         # the stand's local Y quarter-turn, keeping its official translation.
@@ -122,8 +127,13 @@ class MujocoBackend:
                       contype="0", conaffinity="0")
 
         mount_xyz, mount_rpy = origin("d435_camera_joint")
+        # Rotate the complete D435 mount position around link6's local +X axis.
+        # This preserves the camera-to-wrist distance and moves it from the
+        # lateral side to the top in the requested reverse-X view.
+        mount_xyz = [mount_xyz[0], -mount_xyz[2], mount_xyz[1]]
+        mount_quat = quat_mul(quat(mount_rpy), quat([math.pi / 2, 0, 0]))
         mount = ET.SubElement(link6, "body", name="d435_camera_link",
-                              pos=values(mount_xyz), quat=values(quat(mount_rpy)))
+                              pos=values(mount_xyz), quat=values(mount_quat))
         link_xyz, link_rpy = origin("camera_link_joint")
         camera_link = ET.SubElement(mount, "body", name="camera_link",
                                     pos=values(link_xyz), quat=values(quat(link_rpy)))
@@ -140,6 +150,7 @@ class MujocoBackend:
         tree.write(temp.name, encoding="utf-8", xml_declaration=True)
         temp.close()
         return Path(temp.name)
+
 
     def _dae_to_obj(self, source: Path) -> Path:
         """Convert an upstream COLLADA mesh to a temporary OBJ for MuJoCo.

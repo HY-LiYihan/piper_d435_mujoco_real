@@ -17,6 +17,9 @@ def test_mujoco_rgbd_contract():
     stand_id = backend.model.body("camera_stand_link").id
     stand_axes = backend.data.xmat[stand_id].reshape(3, 3)
     assert abs(float(stand_axes[1, 0])) > 0.99
+    link6_id = backend.model.body("link6").id
+    stand_offset = backend.data.xpos[stand_id] - backend.data.xpos[link6_id]
+    assert float(stand_offset[1]) > 0.07
     stand_mesh = backend.model.mesh("wrist_camera_stand").id
     start = backend.model.mesh_vertadr[stand_mesh]
     count = backend.model.mesh_vertnum[stand_mesh]
