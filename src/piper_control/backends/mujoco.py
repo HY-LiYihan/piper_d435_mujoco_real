@@ -107,7 +107,8 @@ class MujocoBackend:
         d435_obj = self._dae_to_obj(WRIST_D435_MESH)
         stand_obj = self._dae_to_obj(WRIST_STAND_MESH)
         ET.SubElement(asset, "mesh", name="wrist_camera_d435", file=str(d435_obj))
-        ET.SubElement(asset, "mesh", name="wrist_camera_stand", file=str(stand_obj))
+        ET.SubElement(asset, "mesh", name="wrist_camera_stand", file=str(stand_obj),
+                      scale="0.001 0.001 0.001")
 
         stand_xyz, stand_rpy = origin("camera_stand_joint")
         stand = ET.SubElement(link6, "body", name="camera_stand_link",
