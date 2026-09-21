@@ -1,0 +1,7 @@
+[submodule "vendor/piper_sdk"]
+	path = vendor/piper_sdk
+	url = https://github.com/agilexrobotics/piper_sdk.git
+[submodule "vendor/piper_isaac_sim"]
+	path = vendor/piper_isaac_sim
+	url = https://github.com/agilexrobotics/piper_isaac_sim.git
+	ignore = dirty
