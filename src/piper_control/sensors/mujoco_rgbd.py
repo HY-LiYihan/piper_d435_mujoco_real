@@ -7,7 +7,7 @@ from ..errors import BackendUnavailableError
 
 
 class MujocoRGBDCamera:
-    def __init__(self, model, data, camera=-1, width=1280, height=720, frame_id="mujoco_camera"):
+    def __init__(self, model, data, camera="wrist_camera", width=1280, height=720, frame_id="wrist_camera"):
         self.model, self.data, self.camera = model, data, camera
         self.width, self.height, self.frame_id = width, height, frame_id
         self._renderer = None

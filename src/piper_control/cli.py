@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
 from typing import Annotated
 import typer
 from .api.robot import PiperRobot
@@ -11,6 +16,13 @@ app = typer.Typer(help="Unified Piper real-robot and MuJoCo control CLI")
 
 def _robot(backend: str, can_name: str):
     return PiperRobot.connect(backend, {"can_name": can_name} if backend == "real" else {})
+
+
+def _pose_dict(pose: Pose) -> dict[str, list[float]]:
+    return {
+        "position_m": [float(value) for value in pose.position],
+        "quaternion_wxyz": [float(value) for value in pose.quaternion],
+    }
 
 
 @app.command()
@@ -35,22 +47,58 @@ def state(backend: str = "mujoco", can_name: str = "can0"):
         robot.disconnect()
 
 
-@app.command("move-joints")
-def move_joints(joints: Annotated[list[float], typer.Argument(help="Six joint angles in radians")],
-                backend: str = "mujoco", can_name: str = "can0"):
+@app.command()
+def pose(backend: str = "mujoco", can_name: str = "can0"):
+    """Print the current end-effector pose as JSON."""
     robot = _robot(backend, can_name)
     try:
-        robot.move_joints(joints)
+        current = robot.state().pose
+        if current is None:
+            raise typer.BadParameter("backend did not return an end-effector pose")
+        typer.echo(json.dumps(_pose_dict(current), indent=2))
+    finally:
+        robot.disconnect()
+
+
+@app.command("move-joints")
+def move_joints(
+    j1: float = typer.Option(..., "--j1", help="Joint 1 in radians"),
+    j2: float = typer.Option(..., "--j2", help="Joint 2 in radians"),
+    j3: float = typer.Option(..., "--j3", help="Joint 3 in radians"),
+    j4: float = typer.Option(..., "--j4", help="Joint 4 in radians"),
+    j5: float = typer.Option(..., "--j5", help="Joint 5 in radians"),
+    j6: float = typer.Option(..., "--j6", help="Joint 6 in radians"),
+    backend: str = "mujoco", can_name: str = "can0"):
+    robot = _robot(backend, can_name)
+    try:
+        robot.move_joints([j1, j2, j3, j4, j5, j6])
+        typer.echo(json.dumps({"joints_rad": [j1, j2, j3, j4, j5, j6]}, indent=2))
     finally:
         robot.disconnect()
 
 
 @app.command("move-p")
-def move_p(x: float, y: float, z: float, qw: float = 1.0, qx: float = 0.0,
-           qy: float = 0.0, qz: float = 0.0, backend: str = "mujoco", can_name: str = "can0"):
+def move_p(
+           x: float = typer.Option(..., "--x", help="X position in metres"),
+           y: float = typer.Option(..., "--y", help="Y position in metres"),
+           z: float = typer.Option(..., "--z", help="Z position in metres"),
+           qw: float | None = typer.Option(None, "--qw"), qx: float | None = typer.Option(None, "--qx"),
+           qy: float | None = typer.Option(None, "--qy"), qz: float | None = typer.Option(None, "--qz"),
+           backend: str = "mujoco", can_name: str = "can0"):
     robot = _robot(backend, can_name)
     try:
-        robot.move_p(Pose((x, y, z), (qw, qx, qy, qz)))
+        quaternion = (qw, qx, qy, qz)
+        if all(value is None for value in quaternion):
+            current = robot.state().pose
+            if current is None:
+                raise typer.BadParameter("backend did not return a pose for orientation hold")
+            quaternion = current.quaternion
+        elif any(value is None for value in quaternion):
+            raise typer.BadParameter("provide all four quaternion options or none")
+        robot.move_p(Pose((x, y, z), tuple(float(value) for value in quaternion)))
+        current = robot.state().pose
+        if current is not None:
+            typer.echo(json.dumps(_pose_dict(current), indent=2))
     finally:
         robot.disconnect()
 
@@ -60,6 +108,7 @@ def gripper(width: float, effort: float | None = None, backend: str = "mujoco", 
     robot = _robot(backend, can_name)
     try:
         robot.gripper(width, effort)
+        typer.echo(json.dumps({"gripper_width_m": robot.state().joints.gripper}, indent=2))
     finally:
         robot.disconnect()
 
@@ -74,11 +123,27 @@ def stop(backend: str = "mujoco", can_name: str = "can0"):
 
 
 @app.command()
-def run(backend: str = "mujoco", can_name: str = "can0", steps: int = 0):
+def run(backend: str = "mujoco", can_name: str = "can0", steps: int = 0,
+        gui: bool = False, duration: float = 0.0):
     """Start a backend and optionally advance a MuJoCo simulation."""
     robot = _robot(backend, can_name)
     try:
-        if backend == "mujoco" and steps > 0:
+        if gui:
+            if backend != "mujoco":
+                raise typer.BadParameter("--gui is only supported by the MuJoCo backend")
+            if sys.platform == "darwin" and not os.environ.get("PIPER_MUJOCO_GUI_REEXEC"):
+                mjpython = shutil.which("mjpython")
+                if not mjpython:
+                    raise RuntimeError("macOS MuJoCo GUI requires mjpython; install the MuJoCo Python runtime first")
+                environment = os.environ.copy()
+                environment["PIPER_MUJOCO_GUI_REEXEC"] = "1"
+                source_root = str(Path(__file__).resolve().parents[1])
+                environment["PYTHONPATH"] = source_root + os.pathsep + environment.get("PYTHONPATH", "")
+                subprocess.run([mjpython, "-m", "piper_control.mujoco_gui", "--duration", str(duration)],
+                               env=environment, check=True)
+                return
+            robot._backend.run_gui(duration)
+        elif backend == "mujoco" and steps > 0:
             impl = robot._backend
             impl._step(steps)
         typer.echo(robot.state())
@@ -87,19 +152,43 @@ def run(backend: str = "mujoco", can_name: str = "can0", steps: int = 0):
 
 
 @app.command()
-def camera(backend: str = "real", can_name: str = "can0"):
-    """Read one 1280x720 RGB-D frame and print its metadata."""
-    if backend != "real":
-        raise typer.BadParameter("camera command currently supports backend=real")
-    from .sensors.realsense import RealSenseCamera
-    cam = RealSenseCamera()
+def camera(backend: str = "mujoco", can_name: str = "can0",
+           rgb_out: Path = Path("wrist_rgb.png"), depth_out: Path = Path("wrist_depth.npy")):
+    """Capture one aligned 1280x720 wrist RGB-D frame."""
+    robot = None
+    if backend == "real":
+        from .sensors.realsense import RealSenseCamera
+        cam = RealSenseCamera()
+    elif backend == "mujoco":
+        from .sensors.mujoco_rgbd import MujocoRGBDCamera
+        robot = _robot("mujoco", can_name)
+        cam = MujocoRGBDCamera(robot._backend.model, robot._backend.data)
+    else:
+        raise typer.BadParameter(f"unknown backend: {backend}")
     cam.connect()
     try:
         frame = cam.read()
-        typer.echo(json.dumps({"shape": frame.color.shape, "depth_shape": frame.depth.shape,
-                               "frame_id": frame.frame_id, "depth_scale": frame.depth_scale}))
+        import numpy as np
+        try:
+            from PIL import Image
+        except ImportError as exc:
+            raise RuntimeError("Install piper-control[camera] to save PNG images") from exc
+        rgb_out.parent.mkdir(parents=True, exist_ok=True)
+        depth_out.parent.mkdir(parents=True, exist_ok=True)
+        Image.fromarray(frame.color).save(rgb_out)
+        np.save(depth_out, frame.depth)
+        typer.echo(json.dumps({
+            "rgb": str(rgb_out.resolve()),
+            "depth": str(depth_out.resolve()),
+            "color_shape": list(frame.color.shape),
+            "depth_shape": list(frame.depth.shape),
+            "frame_id": frame.frame_id,
+            "depth_scale": frame.depth_scale,
+        }, indent=2))
     finally:
         cam.disconnect()
+        if robot is not None:
+            robot.disconnect()
 
 
 if __name__ == "__main__":

@@ -9,6 +9,8 @@ from piper_control.sensors.mujoco_rgbd import MujocoRGBDCamera
 def test_mujoco_rgbd_contract():
     backend = MujocoBackend()
     backend.connect()
+    assert backend.model.ncam == 1
+    assert backend.model.camera("wrist_camera").id == 0
     camera = MujocoRGBDCamera(backend.model, backend.data)
     camera.connect()
     try:

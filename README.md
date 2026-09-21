@@ -30,7 +30,54 @@ robot.stop()
 robot.disconnect()
 ```
 
-CLI：`piper doctor`, `piper state`, `piper move-joints`, `piper move-p`, `piper gripper`, `piper stop`。
+## 常用仿真命令
+
+打开 MuJoCo GUI（窗口关闭前持续运行）：
+
+```bash
+piper run --backend mujoco --gui
+```
+
+读取当前末端位姿（位置 m，四元数顺序 wxyz）：
+
+```bash
+piper pose --backend mujoco
+```
+
+移动到指定位置；不提供四元数时保持当前姿态：
+
+```bash
+piper move-p --backend mujoco --x 0.055 --y 0.0 --z 0.203
+```
+
+指定完整四元数：
+
+```bash
+piper move-p --backend mujoco --x 0.055 --y 0.0 --z 0.203 \
+  --qw 1.0 --qx 0.0 --qy 0.0 --qz 0.0
+```
+
+控制夹爪，单位为米：
+
+```bash
+piper gripper 0.02 --backend mujoco
+```
+
+获取腕部 D435 RGB-D。RGB 为 PNG，depth 为米制 `float32` NumPy 文件，分辨率固定 1280x720：
+
+```bash
+piper camera --backend mujoco \
+  --rgb-out wrist_rgb.png --depth-out wrist_depth.npy
+```
+
+关节命令使用弧度，并采用选项形式以支持负数：
+
+```bash
+piper move-joints --backend mujoco \
+  --j1 0.1 --j2 0.2 --j3 -0.2 --j4 0 --j5 0 --j6 0
+```
+
+腕部支架和 D435 相机的固定关系来自上游 `piper_description_v100_realsense_camera_v2.urdf`，D435 模型参数来自上游 `realsense2_description/urdf/_d435.urdf.xacro`；MuJoCo 运行时只做 DAE 到 OBJ 的格式转换，不重新定义几何模型。
 
 ## 开发
 

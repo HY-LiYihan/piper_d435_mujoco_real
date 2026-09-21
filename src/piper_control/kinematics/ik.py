@@ -36,7 +36,7 @@ class NumericalIK:
 
     def solve(self, target: Pose, seed: np.ndarray | None = None,
               enforce_limits: bool = True, max_iterations: int = 200,
-              tolerance: float = 1e-4) -> IKResult:
+              tolerance: float = 1e-3) -> IKResult:
         q = np.array(self.data.qpos[:6] if seed is None else seed, dtype=float).copy()
         if q.shape != (6,):
             raise ValueError("IK seed must contain six joints")
