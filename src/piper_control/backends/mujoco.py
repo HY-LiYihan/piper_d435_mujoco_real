@@ -111,8 +111,13 @@ class MujocoBackend:
                       scale="0.001 0.001 0.001")
 
         stand_xyz, stand_rpy = origin("camera_stand_joint")
+        # The upstream URDF mount is mirrored relative to the MuJoCo wrist
+        # convention. Apply the requested local CCW Z quarter-turn followed by
+        # the stand's local Y quarter-turn, keeping its official translation.
+        stand_quat = quat_mul(quat_mul(quat(stand_rpy), quat([0, 0, math.pi / 2])),
+                              quat([0, math.pi / 2, 0]))
         stand = ET.SubElement(link6, "body", name="camera_stand_link",
-                              pos=values(stand_xyz), quat=values(quat(stand_rpy)))
+                              pos=values(stand_xyz), quat=values(stand_quat))
         ET.SubElement(stand, "geom", type="mesh", mesh="wrist_camera_stand",
                       contype="0", conaffinity="0")
 
@@ -128,8 +133,9 @@ class MujocoBackend:
         # Use the RealSense optical-frame convention from _d435.urdf.xacro.
         # ROS optical (+Z forward, +Y down) to MuJoCo camera (-Z forward, +Y up).
         optical_quat = quat_mul(quat([-math.pi / 2, 0, -math.pi / 2]), quat([math.pi, 0, 0]))
+        camera_quat = quat_mul(optical_quat, quat([0, 0, math.pi / 2]))
         ET.SubElement(camera_link, "camera", name="wrist_camera", pos="0 0 0",
-                      quat=values(optical_quat), fovy="60")
+                      quat=values(camera_quat), fovy="60")
         temp = tempfile.NamedTemporaryFile(prefix="piper_wrist_", suffix=".xml", dir=self.model_path.parent, delete=False)
         tree.write(temp.name, encoding="utf-8", xml_declaration=True)
         temp.close()
