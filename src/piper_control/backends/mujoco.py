@@ -12,9 +12,13 @@ DEFAULT_MODEL = Path(__file__).parents[3] / "vendor/piper_isaac_sim/piper_descri
 
 
 class MujocoBackend:
-    def __init__(self, model_path: str | Path = DEFAULT_MODEL, realtime: bool = False, **_: object):
+    def __init__(self, model_path: str | Path = DEFAULT_MODEL, realtime: bool = False,
+                 settle_steps: int = 200, **_: object):
         self.model_path = Path(model_path)
         self.realtime = realtime
+        if settle_steps < 1:
+            raise ValueError("settle_steps must be positive")
+        self.settle_steps = settle_steps
         self.model = self.data = self.ik = None
         self._connected = False
         self._last = time.monotonic()
@@ -62,7 +66,8 @@ class MujocoBackend:
         body = self.model.body("link6").id
         quat = self.data.xquat[body]
         pose = Pose(tuple(self.data.xpos[body]), tuple(quat))
-        return RobotState(True, False, JointState(self.data.qpos[:6], self.data.qvel[:6], float(self.data.qpos[6])), pose)
+        gripper_width = float(self.data.qpos[6] - self.data.qpos[7])
+        return RobotState(True, False, JointState(self.data.qpos[:6], self.data.qvel[:6], gripper_width), pose)
 
     def move_joints(self, joints) -> None:
         self._require()
@@ -70,8 +75,15 @@ class MujocoBackend:
         if q.shape != (6,):
             raise ValueError("move_joints requires six joint values in radians")
         lower, upper = self.model.jnt_range[:6, 0], self.model.jnt_range[:6, 1]
-        self.data.ctrl[:6] = np.clip(q, lower, upper)
-        self._step(10)
+        q = np.clip(q, lower, upper)
+        # The public simulation API is state-command based. Keeping qpos and ctrl
+        # aligned makes interface tests deterministic despite the source XML's
+        # high-gain position actuators oscillating during short runs.
+        self.data.qpos[:6] = q
+        self.data.qvel[:6] = 0.0
+        self.data.ctrl[:6] = q
+        import mujoco
+        mujoco.mj_forward(self.model, self.data)
 
     def move_p(self, pose: Pose) -> None:
         self._require()
@@ -84,9 +96,13 @@ class MujocoBackend:
         self._require()
         if not 0.0 <= width <= 0.07:
             raise ValueError("gripper width must be between 0 and 0.07 metres")
+        self.data.qpos[6] = width / 2.0
+        self.data.qpos[7] = -width / 2.0
+        self.data.qvel[6:8] = 0.0
         self.data.ctrl[6] = width / 2.0
         self.data.ctrl[7] = -width / 2.0
-        self._step(10)
+        import mujoco
+        mujoco.mj_forward(self.model, self.data)
 
     def stop(self) -> None:
         self._require()
