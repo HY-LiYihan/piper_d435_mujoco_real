@@ -9,9 +9,9 @@ import numpy as np
 from ..api.types import JointState, Pose, RobotState
 from ..errors import BackendUnavailableError, IKError, NotConnectedError
 from ..kinematics.ik import NumericalIK
+from .piper_model import DEFAULT_MODEL, ARM_JOINTS, FINGER_JOINTS, build_piper_scene
 
 
-DEFAULT_MODEL = Path(__file__).parents[3] / "vendor/piper_isaac_sim/piper_description/mujoco_model/piper_description.xml"
 WRIST_D435_MESH = Path(__file__).parents[3] / "vendor/piper_isaac_sim/realsense2_description/meshes/d435.dae"
 WRIST_STAND_MESH = Path(__file__).parents[3] / "vendor/piper_isaac_sim/piper_description/meshes/dae/realsense_mid_stand.dae"
 
@@ -48,17 +48,41 @@ class MujocoBackend:
             raise BackendUnavailableError("Install piper-control[mujoco] to use MuJoCo") from exc
         if not self.model_path.exists():
             raise BackendUnavailableError(f"MuJoCo model not found: {self.model_path}")
-        model_path = self._model_with_wrist_camera() if self.wrist_camera else self.model_path
+        temporary_model = None
         try:
-            self.model = mujoco.MjModel.from_xml_path(str(model_path))
+            if self.model_path.suffix in (".urdf", ".xacro"):
+                tree = build_piper_scene(self.model_path)
+                if self.wrist_camera:
+                    self._add_wrist_camera(tree)
+                self.model = mujoco.MjModel.from_xml_string(ET.tostring(tree.getroot(), encoding="unicode"))
+            else:
+                # Preserve explicit MJCF overrides, including relative mesh paths.
+                if self.wrist_camera:
+                    tree = ET.parse(self.model_path)
+                    self._add_wrist_camera(tree)
+                    with tempfile.NamedTemporaryFile(prefix="piper_wrist_", suffix=".xml",
+                                                     dir=self.model_path.parent, delete=False) as file:
+                        temporary_model = Path(file.name)
+                        tree.write(file, encoding="utf-8", xml_declaration=True)
+                self.model = mujoco.MjModel.from_xml_path(str(temporary_model or self.model_path))
         finally:
-            if model_path != self.model_path:
-                model_path.unlink(missing_ok=True)
+            if temporary_model is not None:
+                temporary_model.unlink(missing_ok=True)
             for temporary_file in self._temporary_files:
                 temporary_file.unlink(missing_ok=True)
             self._temporary_files.clear()
         self.data = mujoco.MjData(self.model)
-        joint_ids = np.array([self.model.joint(f"joint{i+1}").id for i in range(6)])
+        joint_ids = np.array([self.model.joint(name).id for name in ARM_JOINTS])
+        self._arm_qpos = self.model.jnt_qposadr[joint_ids].copy()
+        self._arm_dofs = self.model.jnt_dofadr[joint_ids].copy()
+        self._arm_actuators = np.array([self.model.actuator(name).id for name in ARM_JOINTS])
+        finger_names = FINGER_JOINTS if self.model_path.suffix in (".urdf", ".xacro") else ("joint7", "joint8")
+        finger_ids = np.array([self.model.joint(name).id for name in finger_names])
+        self._finger_qpos = self.model.jnt_qposadr[finger_ids].copy()
+        self._finger_dofs = self.model.jnt_dofadr[finger_ids].copy()
+        self._finger_actuators = np.array([self.model.actuator(name).id for name in finger_names])
+        finger_limits = self.model.jnt_range[finger_ids]
+        self._gripper_max_width = float(min(finger_limits[0, 1], -finger_limits[1, 0]) * 2)
         lower = self.model.jnt_range[joint_ids, 0].copy()
         upper = self.model.jnt_range[joint_ids, 1].copy()
         body_id = self.model.body("link6").id
@@ -66,14 +90,8 @@ class MujocoBackend:
         mujoco.mj_forward(self.model, self.data)
         self._connected = True
 
-    def _model_with_wrist_camera(self) -> Path:
-        """Build a temporary ordinary-Piper scene with the official D435i mount.
-
-        The arm and gripper remain from the ordinary upstream MuJoCo XML. The
-        camera meshes, mount transforms, and nominal sensor frame chain mirror
-        the pinned Isaac/RealSense assets without introducing movable joints.
-        """
-        tree = ET.parse(self.model_path)
+    def _add_wrist_camera(self, tree: ET.ElementTree) -> None:
+        """Attach the retained Isaac D435i assets to the model's link6 frame."""
         root = tree.getroot()
         link6 = next((body for body in root.iter("body") if body.get("name") == "link6"), None)
         if link6 is None:
@@ -154,12 +172,12 @@ class MujocoBackend:
         # link6 frame.  Applying the V100-to-ordinary conversion here shifts
         # the bracket away from the camera, even though the camera itself is
         # already positioned correctly.
-        stand_transform = transform_xyz_rpy([-0.032, -0.003, 0.018], [0.0, 3.14, 1.57])
+        stand_transform = transform_xyz_rpy([-0.032, -0.002, 0.025], [0.0, 3.14, 1.57])
         stand = body_from_transform(link6, "camera_stand_link", stand_transform)
         ET.SubElement(stand, "geom", type="mesh", mesh="d435i_printed_stand",
                       contype="0", conaffinity="0")
 
-        mount_v100 = transform_xyz_rpy([-0.029, 0.065, 0.022], [0.0, -1.22, -1.57])
+        mount_v100 = transform_xyz_rpy([-0.0315, 0.064, 0.027], [0.0, -1.22, -1.57])
         mount = body_from_transform(link6, "d435i_link", mat_mul(ordinary_from_v100, mount_v100))
         camera_link = ET.SubElement(mount, "body", name="d435i_camera_link",
                                     pos="0.0106 0.0175 0.0125")
@@ -197,10 +215,6 @@ class MujocoBackend:
         # color-aligned, matching the RealSense ``align(color)`` stream.
         ET.SubElement(color_optical, "camera", name="d435i_depth_optical_camera",
                       pos="0 0 0", quat=optical_to_mujoco, fovy="60")
-        temp = tempfile.NamedTemporaryFile(prefix="piper_wrist_", suffix=".xml", dir=self.model_path.parent, delete=False)
-        tree.write(temp.name, encoding="utf-8", xml_declaration=True)
-        temp.close()
-        return Path(temp.name)
 
 
     def _dae_to_obj(self, source: Path) -> Path:
@@ -261,8 +275,12 @@ class MujocoBackend:
         self._temporary_files.append(output_path)
         return output_path
 
-    def run_gui(self, duration: float = 0.0) -> None:
-        """Run a native MuJoCo viewer until closed or duration expires."""
+    def run_gui(self, duration: float = 0.0, lock=None) -> None:
+        """Run a native MuJoCo viewer until closed or duration expires.
+
+        When a shared-scene ``lock`` is supplied, stepping and viewer sync are
+        serialized against concurrent SceneServer commands.
+        """
         self._require()
         try:
             import mujoco.viewer
@@ -273,8 +291,13 @@ class MujocoBackend:
             while viewer.is_running():
                 if duration > 0 and time.monotonic() - started >= duration:
                     break
-                self._step(1)
-                viewer.sync()
+                if lock is not None:
+                    with lock:
+                        self._step(1)
+                        viewer.sync()
+                else:
+                    self._step(1)
+                    viewer.sync()
 
     def _require(self):
         if not self._connected or self.model is None or self.data is None:
@@ -302,44 +325,46 @@ class MujocoBackend:
         body = self.model.body("link6").id
         quat = self.data.xquat[body]
         pose = Pose(tuple(self.data.xpos[body]), tuple(quat))
-        gripper_width = float(self.data.qpos[6] - self.data.qpos[7])
-        return RobotState(True, False, JointState(self.data.qpos[:6], self.data.qvel[:6], gripper_width), pose)
+        fingers = self.data.qpos[self._finger_qpos]
+        gripper_width = float(fingers[0] - fingers[1])
+        # Copy: MuJoCo array slices alias the live simulation data, so a
+        # returned JointState must be an independent snapshot.
+        joints = JointState(self.data.qpos[self._arm_qpos].copy(), self.data.qvel[self._arm_dofs].copy(), gripper_width)
+        return RobotState(True, False, joints, pose)
 
     def move_joints(self, joints) -> None:
         self._require()
         q = np.asarray(joints, dtype=float)
         if q.shape != (6,):
             raise ValueError("move_joints requires six joint values in radians")
-        lower, upper = self.model.jnt_range[:6, 0], self.model.jnt_range[:6, 1]
-        q = np.clip(q, lower, upper)
-        # The public simulation API is state-command based. Keeping qpos and ctrl
-        # aligned makes interface tests deterministic despite the source XML's
-        # high-gain position actuators oscillating during short runs.
-        self.data.qpos[:6] = q
-        self.data.qvel[:6] = 0.0
-        self.data.ctrl[:6] = q
+        q = np.clip(q, self.ik.lower, self.ik.upper)
+        # The public API sets state immediately; explicit stepping then follows
+        # the position actuators and physical forces from this commanded state.
+        self.data.qpos[self._arm_qpos] = q
+        self.data.qvel[self._arm_dofs] = 0.0
+        self.data.ctrl[self._arm_actuators] = q
         import mujoco
         mujoco.mj_forward(self.model, self.data)
 
     def move_p(self, pose: Pose) -> None:
         self._require()
-        result = self.ik.solve(pose, seed=self.data.qpos[:6])
+        result = self.ik.solve(pose, seed=self.data.qpos[self._arm_qpos])
         if not result.success:
             raise IKError(f"MuJoCo IK failed: {result.message}; position={result.position_error:.6g}")
         self.move_joints(result.joints)
 
     def gripper(self, width: float, effort: float | None = None) -> None:
         self._require()
-        if not 0.0 <= width <= 0.07:
-            raise ValueError("gripper width must be between 0 and 0.07 metres")
-        self.data.qpos[6] = width / 2.0
-        self.data.qpos[7] = -width / 2.0
-        self.data.qvel[6:8] = 0.0
-        self.data.ctrl[6] = width / 2.0
-        self.data.ctrl[7] = -width / 2.0
+        if not 0.0 <= width <= self._gripper_max_width:
+            raise ValueError(f"gripper width must be between 0 and {self._gripper_max_width:g} metres")
+        targets = [width / 2.0, -width / 2.0]
+        self.data.qpos[self._finger_qpos] = targets
+        self.data.qvel[self._finger_dofs] = 0.0
+        self.data.ctrl[self._finger_actuators] = targets
         import mujoco
         mujoco.mj_forward(self.model, self.data)
 
     def stop(self) -> None:
         self._require()
-        self.data.ctrl[:] = self.data.qpos[: self.model.nu]
+        self.data.ctrl[self._arm_actuators] = self.data.qpos[self._arm_qpos]
+        self.data.ctrl[self._finger_actuators] = self.data.qpos[self._finger_qpos]

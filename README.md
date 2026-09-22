@@ -7,13 +7,15 @@
 | 组件 | URL | 固定版本 |
 | --- | --- | --- |
 | Piper SDK | https://github.com/agilexrobotics/piper_sdk | `0.6.2`, `c9e8a28174e71eeaac448593cb65f8ab258a92fe` |
-| Piper Isaac assets | https://github.com/agilexrobotics/piper_isaac_sim | master, `8e1f88fdb7afca49c40e9a0c1c01cc588e86f0d2` |
+| Piper 官方 URDF / 夹爪 / meshes | https://github.com/agilexrobotics/agx_arm_urdf | `f6642ce0d7872c686f29c99e9e10cd23d1d49313` |
+| D435 外壳和支架资源 | https://github.com/agilexrobotics/piper_isaac_sim | `8e1f88fdb7afca49c40e9a0c1c01cc588e86f0d2` |
 
-Isaac assets 作为 submodule 保留；当前 MVP 使用其中的 MuJoCo XML 和 mesh，不要求 Isaac Sim。
+两个模型仓库作为 submodule 保留。机械臂与夹爪使用 `agx_arm_urdf/piper`；旧 Isaac 仓库仅提供 D435 外壳和打印支架，不要求 Isaac Sim 或 ROS。
 
 ## 安装
 
 ```bash
+git submodule update --init --recursive
 pip install -e ".[mujoco,dev]"
 pip install -e ".[real,camera]"  # 需要真机/RealSense 时
 ```
@@ -21,10 +23,13 @@ pip install -e ".[real,camera]"  # 需要真机/RealSense 时
 ## 使用
 
 ```python
-from piper_control import PiperRobot, Pose
+from piper_control import PiperRobot
 
 robot = PiperRobot.connect("mujoco")
-robot.move_p(Pose((0.30, 0.0, 0.30), (0.0, 0.0, 1.0, 0.0)))
+robot.move_joints([0.2, 0.8, -1.2, 0.2, -0.3, 0.4])
+target = robot.state().pose
+robot.move_joints([0.22, 0.82, -1.22, 0.22, -0.32, 0.42])
+robot.move_p(target)
 print(robot.state())
 robot.stop()
 robot.disconnect()
@@ -47,14 +52,14 @@ piper pose --backend mujoco
 移动到指定位置；不提供四元数时保持当前姿态：
 
 ```bash
-piper move-p --backend mujoco --x 0.055 --y 0.0 --z 0.203
+piper move-p --backend mujoco --x 0.0561352 --y 0.0 --z 0.2131783
 ```
 
 指定完整四元数：
 
 ```bash
-piper move-p --backend mujoco --x 0.055 --y 0.0 --z 0.203 \
-  --qw 1.0 --qx 0.0 --qy 0.0 --qz 0.0
+piper move-p --backend mujoco --x 0.0561352 --y 0.0 --z 0.2131783 \
+  --qw -0.73727734 --qx 0.0 --qy -0.67559020 --qz 0.0
 ```
 
 控制夹爪，单位为米：
@@ -77,7 +82,9 @@ piper move-joints --backend mujoco \
   --j1 0.1 --j2 0.2 --j3 -0.2 --j4 0 --j5 0 --j6 0
 ```
 
-MuJoCo 使用官方普通 Piper 带夹爪 XML 作为机械臂主体，在运行时附加官方 Isaac 资源中的打印支架和 D435 外壳。D435i 的 RGB、Depth、双红外和 IMU 坐标链采用上游 `realsense2_description` 的 nominal extrinsics；机械臂本体的关节、夹爪和 FK 不会因相机附加物改变。
+MuJoCo 启动时读取 `vendor/agx_arm_urdf/piper/urdf/piper_with_gripper_description.xacro` 及其引用的 `piper_description.urdf`，转换为仿真模型。关节坐标、限位、质量和惯量来自这些文件，显示和碰撞使用新仓库的 STL 网格，末端固定为 `link6`。法兰与夹爪结构来自新 Xacro；仿真夹爪开口范围为 0–0.10 m，两侧手指通过等式约束同步运动。
+
+位置执行器和阻尼由本项目配置。D435 外壳及打印支架仍使用旧 Isaac 仓库的两个 DAE 文件；相机安装变换和 nominal extrinsics 保留在本项目代码中，未做实机重新标定。真机 SDK 控制路径与原有 0–0.07 m 夹爪限制暂不改变。已经运行的 GUI/共享场景需重启才能加载新模型。
 
 ## 开发
 

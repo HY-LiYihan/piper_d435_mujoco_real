@@ -18,6 +18,23 @@ def _robot(backend: str, can_name: str):
     return PiperRobot.connect(backend, {"can_name": can_name} if backend == "real" else {})
 
 
+def _run_scene_host(duration: float) -> None:
+    """Host the shared MuJoCo scene; on macOS re-exec through mjpython for the viewer."""
+    if sys.platform == "darwin" and not os.environ.get("PIPER_MUJOCO_GUI_REEXEC"):
+        mjpython = shutil.which("mjpython")
+        if not mjpython:
+            raise RuntimeError("macOS MuJoCo GUI requires mjpython; install the MuJoCo Python runtime first")
+        environment = os.environ.copy()
+        environment["PIPER_MUJOCO_GUI_REEXEC"] = "1"
+        source_root = str(Path(__file__).resolve().parents[1])
+        environment["PYTHONPATH"] = source_root + os.pathsep + environment.get("PYTHONPATH", "")
+        subprocess.run([mjpython, "-m", "piper_control.mujoco_gui", "--duration", str(duration)],
+                       env=environment, check=True)
+        return
+    from .mujoco_gui import run_host
+    run_host(duration)
+
+
 def _pose_dict(pose: Pose) -> dict[str, list[float]]:
     return {
         "position_m": [float(value) for value in pose.position],
@@ -125,27 +142,26 @@ def stop(backend: str = "mujoco", can_name: str = "can0"):
 @app.command()
 def run(backend: str = "mujoco", can_name: str = "can0", steps: int = 0,
         gui: bool = False, duration: float = 0.0):
-    """Start a backend and optionally advance a MuJoCo simulation."""
+    """Own the shared MuJoCo scene (--gui) or report its current state."""
+    if gui:
+        if backend != "mujoco":
+            raise typer.BadParameter("--gui is only supported by the MuJoCo backend")
+        _run_scene_host(duration)
+        return
+    if backend == "mujoco" and steps > 0:
+        # Standalone stepping keeps the documented --steps mode working
+        # without requiring a running GUI process.
+        from .backends.mujoco import MujocoBackend
+        impl = MujocoBackend(realtime=True)
+        impl.connect()
+        try:
+            impl._step(steps)
+            typer.echo(impl.state())
+        finally:
+            impl.disconnect()
+        return
     robot = _robot(backend, can_name)
     try:
-        if gui:
-            if backend != "mujoco":
-                raise typer.BadParameter("--gui is only supported by the MuJoCo backend")
-            if sys.platform == "darwin" and not os.environ.get("PIPER_MUJOCO_GUI_REEXEC"):
-                mjpython = shutil.which("mjpython")
-                if not mjpython:
-                    raise RuntimeError("macOS MuJoCo GUI requires mjpython; install the MuJoCo Python runtime first")
-                environment = os.environ.copy()
-                environment["PIPER_MUJOCO_GUI_REEXEC"] = "1"
-                source_root = str(Path(__file__).resolve().parents[1])
-                environment["PYTHONPATH"] = source_root + os.pathsep + environment.get("PYTHONPATH", "")
-                subprocess.run([mjpython, "-m", "piper_control.mujoco_gui", "--duration", str(duration)],
-                               env=environment, check=True)
-                return
-            robot._backend.run_gui(duration)
-        elif backend == "mujoco" and steps > 0:
-            impl = robot._backend
-            impl._step(steps)
         typer.echo(robot.state())
     finally:
         robot.disconnect()
@@ -160,9 +176,13 @@ def camera(backend: str = "mujoco", can_name: str = "can0",
         from .sensors.realsense import RealSenseCamera
         cam = RealSenseCamera()
     elif backend == "mujoco":
-        from .sensors.mujoco_rgbd import MujocoRGBDCamera
         robot = _robot("mujoco", can_name)
-        cam = MujocoRGBDCamera(robot._backend.model, robot._backend.data)
+        impl = robot._backend
+        if hasattr(impl, "read"):
+            cam = impl  # shared-scene client renders from the running scene
+        else:
+            from .sensors.mujoco_rgbd import MujocoRGBDCamera
+            cam = MujocoRGBDCamera(impl.model, impl.data)
     else:
         raise typer.BadParameter(f"unknown backend: {backend}")
     cam.connect()

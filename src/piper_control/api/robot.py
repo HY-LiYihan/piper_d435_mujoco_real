@@ -5,6 +5,8 @@ from .protocols import RobotBackend
 from .types import Pose, RobotState
 from ..backends.mujoco import MujocoBackend
 from ..backends.real import RealBackend
+from ..errors import BackendUnavailableError
+from ..scene import SceneClient
 
 
 class PiperRobot:
@@ -15,7 +17,18 @@ class PiperRobot:
     def connect(cls, backend: str = "mujoco", config: dict[str, Any] | None = None) -> "PiperRobot":
         config = config or {}
         if backend == "mujoco":
-            impl = MujocoBackend(**config)
+            socket_path = config.pop("socket_path", None)
+            scene = SceneClient(socket_path=socket_path)
+            try:
+                scene.connect()
+            except BackendUnavailableError:
+                # No shared scene is running: fall back to a private in-process
+                # simulation so scripts and tests keep working standalone.
+                scene.disconnect()
+                impl = MujocoBackend(**config)
+                impl.connect()
+                return cls(impl)
+            return cls(scene)
         elif backend == "real":
             impl = RealBackend(**config)
         else:

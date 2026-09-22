@@ -1,0 +1,92 @@
+import tempfile
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+pytest.importorskip("mujoco")
+
+from piper_control import Pose
+from piper_control.backends.mujoco import MujocoBackend
+from piper_control.errors import IKError
+from piper_control.scene import SceneClient, SceneServer
+
+
+@pytest.fixture
+def scene():
+    # AF_UNIX paths are length-limited on macOS, so keep the socket short.
+    socket_path = Path(tempfile.gettempdir()) / f"piper_test_{id(object())}.sock"
+    backend = MujocoBackend()
+    backend.connect()
+    server = SceneServer(backend, socket_path=socket_path)
+    server.start()
+    yield server, socket_path
+    server.stop()
+    backend.disconnect()
+
+
+def _client(socket_path):
+    client = SceneClient(socket_path=socket_path)
+    client.connect()
+    return client
+
+
+def test_client_round_trip_joints_gripper_and_pose(scene):
+    _, socket_path = scene
+    client = _client(socket_path)
+    try:
+        target = [0.1, 0.5, -0.5, 0.0, 0.0, 0.0]
+        client.move_joints(target)
+        assert np.max(np.abs(client.state().joints.positions - target)) < 0.02
+
+        client.gripper(0.03)
+        assert client.state().joints.gripper == pytest.approx(0.03)
+
+        # Generate a reachable pose from the active model, then solve from a
+        # nearby seed. The old model's hard-coded home position is no longer valid.
+        client.move_joints([0.2, 0.8, -1.2, 0.2, -0.3, 0.4])
+        target_pose = client.state().pose
+        client.move_joints([0.22, 0.82, -1.22, 0.22, -0.32, 0.42])
+        client.move_p(target_pose)
+        pose = client.state().pose
+        assert pose is not None
+        assert np.linalg.norm(np.asarray(pose.position) - np.asarray(target_pose.position)) < 0.001
+    finally:
+        client.disconnect()
+
+
+def test_client_propagates_ik_error(scene):
+    _, socket_path = scene
+    client = _client(socket_path)
+    try:
+        with pytest.raises(IKError):
+            client.move_p(Pose((10.0, 0.0, 10.0), (1.0, 0.0, 0.0, 0.0)))
+    finally:
+        client.disconnect()
+
+
+def test_client_camera_round_trip(scene):
+    _, socket_path = scene
+    client = _client(socket_path)
+    try:
+        frame = client.read()
+        assert frame.color.shape == (720, 1280, 3)
+        assert frame.color.dtype == np.uint8
+        assert frame.depth.shape == (720, 1280)
+        assert frame.depth.dtype == np.float32
+        assert frame.depth_scale == 1.0
+        assert np.isfinite(frame.depth).all()
+    finally:
+        client.disconnect()
+
+
+def test_disconnect_lets_new_client_reconnect(scene):
+    _, socket_path = scene
+    first = _client(socket_path)
+    first.move_joints([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    first.disconnect()
+    second = _client(socket_path)
+    try:
+        assert second.state().connected
+    finally:
+        second.disconnect()
