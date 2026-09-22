@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 pytest.importorskip("mujoco")
@@ -6,31 +7,101 @@ from piper_control.backends.mujoco import MujocoBackend
 from piper_control.sensors.mujoco_rgbd import MujocoRGBDCamera
 
 
+FRAME_NAMES = (
+    "d435i_link", "d435i_depth_frame", "d435i_depth_optical_frame",
+    "d435i_infra1_frame", "d435i_infra1_optical_frame", "d435i_infra2_frame",
+    "d435i_infra2_optical_frame", "d435i_color_frame", "d435i_color_optical_frame",
+    "d435i_accel_frame", "d435i_accel_optical_frame", "d435i_gyro_frame",
+    "d435i_gyro_optical_frame",
+)
+
+
 def test_mujoco_rgbd_contract():
-    backend = MujocoBackend()
+    backend = MujocoBackend(settle_steps=1)
     backend.connect()
-    assert backend.model.ncam == 1
-    assert backend.model.camera("wrist_camera").id == 0
-    camera_id = backend.model.camera("wrist_camera").id
-    camera_axes = backend.data.cam_xmat[camera_id].reshape(3, 3)
-    assert float(camera_axes[0, 2]) < -0.9
-    stand_id = backend.model.body("camera_stand_link").id
-    stand_axes = backend.data.xmat[stand_id].reshape(3, 3)
-    assert abs(float(stand_axes[1, 0])) > 0.99
-    link6_id = backend.model.body("link6").id
-    stand_offset = backend.data.xpos[stand_id] - backend.data.xpos[link6_id]
-    assert float(stand_offset[1]) > 0.07
-    stand_mesh = backend.model.mesh("wrist_camera_stand").id
-    start = backend.model.mesh_vertadr[stand_mesh]
-    count = backend.model.mesh_vertnum[stand_mesh]
-    vertices = backend.model.mesh_vert[start:start + count]
-    assert max(vertices.max(axis=0) - vertices.min(axis=0)) < 0.15
-    camera = MujocoRGBDCamera(backend.model, backend.data)
-    camera.connect()
     try:
-        frame = camera.read()
-        assert frame.color.shape == (720, 1280, 3)
-        assert frame.depth.shape == (720, 1280)
+        assert backend.model.nq == 8
+        assert backend.model.nu == 8
+        assert backend.model.ncam == 2
+        assert backend.model.camera("d435i_color_optical_camera").id >= 0
+        assert backend.model.camera("d435i_depth_optical_camera").id >= 0
+        assert all(backend.model.geom(i).name != "d435i_collision" for i in range(backend.model.ngeom))
+        color_cam = backend.model.camera("d435i_color_optical_camera").id
+        depth_cam = backend.model.camera("d435i_depth_optical_camera").id
+        np.testing.assert_allclose(backend.data.cam_xpos[color_cam], backend.data.cam_xpos[depth_cam], atol=1e-12)
+        np.testing.assert_allclose(backend.data.cam_xmat[color_cam], backend.data.cam_xmat[depth_cam], atol=1e-12)
+        for name in FRAME_NAMES:
+            assert backend.model.body(name).id >= 0
+
+        link6_id = backend.model.body("link6").id
+        stand_id = backend.model.body("camera_stand_link").id
+        camera_id = backend.model.body("d435i_link").id
+        stand_offset = backend.data.xpos[stand_id] - backend.data.xpos[link6_id]
+        camera_offset = backend.data.xpos[camera_id] - backend.data.xpos[link6_id]
+        assert np.linalg.norm(stand_offset) < 0.05
+        assert np.linalg.norm(camera_offset) < 0.08
+        assert abs(float(stand_offset[1])) < 0.05
+        assert abs(float(stand_offset[2])) < 0.05
+
+        stand_mesh = backend.model.mesh("d435i_printed_stand").id
+        start = backend.model.mesh_vertadr[stand_mesh]
+        count = backend.model.mesh_vertnum[stand_mesh]
+        vertices = np.asarray(backend.model.mesh_vert[start:start + count])
+        size = np.ptp(vertices, axis=0)
+        assert np.all(size > 0.02)
+        assert np.max(size) < 0.15
+
+        camera = MujocoRGBDCamera(backend.model, backend.data)
+        camera.connect()
+        try:
+            frame = camera.read()
+            assert frame.color.shape == (720, 1280, 3)
+            assert frame.color.dtype == np.uint8
+            assert frame.depth.shape == (720, 1280)
+            assert frame.depth.dtype == np.float32
+            assert frame.depth_scale == 1.0
+            assert np.isfinite(frame.depth).all()
+            assert np.any(frame.depth > 0.0)
+        finally:
+            camera.disconnect()
     finally:
-        camera.disconnect()
+        backend.disconnect()
+
+
+def test_camera_attachment_does_not_change_piper_fk():
+    q = np.array([0.1, 0.4, -1.1, 0.2, -0.3, 0.7])
+    plain = MujocoBackend(wrist_camera=False, settle_steps=1)
+    with_camera = MujocoBackend(wrist_camera=True, settle_steps=1)
+    plain.connect()
+    with_camera.connect()
+    try:
+        plain.move_joints(q)
+        with_camera.move_joints(q)
+        plain_link6 = plain.model.body("link6").id
+        camera_link6 = with_camera.model.body("link6").id
+        np.testing.assert_allclose(plain.data.xpos[plain_link6], with_camera.data.xpos[camera_link6], atol=1e-12)
+        np.testing.assert_allclose(plain.data.xmat[plain_link6], with_camera.data.xmat[camera_link6], atol=1e-12)
+    finally:
+        plain.disconnect()
+        with_camera.disconnect()
+
+
+def test_camera_mount_is_fixed_to_link6_across_joint_angles():
+    backend = MujocoBackend(settle_steps=1)
+    backend.connect()
+    try:
+        link6 = backend.model.body("link6").id
+        camera = backend.model.body("d435i_link").id
+        stand = backend.model.body("camera_stand_link").id
+        relative = []
+        for q in (np.array([0.0, 0.2, -0.8, 0.0, 0.0, 0.0]), np.array([0.4, 0.8, -1.5, 0.2, -0.4, 1.0])):
+            backend.move_joints(q)
+            link_rotation = backend.data.xmat[link6].reshape(3, 3)
+            relative.append((
+                link_rotation.T @ (backend.data.xpos[camera] - backend.data.xpos[link6]),
+                link_rotation.T @ (backend.data.xpos[stand] - backend.data.xpos[link6]),
+            ))
+        np.testing.assert_allclose(relative[0][0], relative[1][0], atol=1e-10)
+        np.testing.assert_allclose(relative[0][1], relative[1][1], atol=1e-10)
+    finally:
         backend.disconnect()

@@ -12,9 +12,19 @@ from ..kinematics.ik import NumericalIK
 
 
 DEFAULT_MODEL = Path(__file__).parents[3] / "vendor/piper_isaac_sim/piper_description/mujoco_model/piper_description.xml"
-WRIST_URDF = Path(__file__).parents[3] / "vendor/piper_isaac_sim/piper_description/urdf/piper_description_v100_realsense_camera_v2.urdf"
 WRIST_D435_MESH = Path(__file__).parents[3] / "vendor/piper_isaac_sim/realsense2_description/meshes/d435.dae"
 WRIST_STAND_MESH = Path(__file__).parents[3] / "vendor/piper_isaac_sim/piper_description/meshes/dae/realsense_mid_stand.dae"
+
+# The upstream Isaac asset is authored against its V100 wrist frame.  The
+# ordinary Piper MuJoCo model has a fixed tool-frame rotation relative to that
+# frame; this constant converts the official V100 wrist mount into link6 of the
+# ordinary Piper without changing the arm's own kinematics.
+ORDINARY_LINK6_FROM_V100_LINK6 = (
+    (0.0, -1.0, 0.0, -0.00009777),
+    (1.0, 0.0, 0.0, 0.00141648),
+    (0.0, 0.0, 1.0, 0.0),
+    (0.0, 0.0, 0.0, 1.0),
+)
 
 
 class MujocoBackend:
@@ -57,30 +67,19 @@ class MujocoBackend:
         self._connected = True
 
     def _model_with_wrist_camera(self) -> Path:
-        """Build a temporary MuJoCo scene from the upstream wrist-camera URDF.
+        """Build a temporary ordinary-Piper scene with the official D435i mount.
 
-        The fixed transforms and meshes are read from the pinned upstream URDF
-        and RealSense description; this keeps the MuJoCo camera aligned with
-        the documented Piper D435 mount rather than duplicating measurements.
+        The arm and gripper remain from the ordinary upstream MuJoCo XML. The
+        camera meshes, mount transforms, and nominal sensor frame chain mirror
+        the pinned Isaac/RealSense assets without introducing movable joints.
         """
         tree = ET.parse(self.model_path)
         root = tree.getroot()
         link6 = next((body for body in root.iter("body") if body.get("name") == "link6"), None)
         if link6 is None:
             raise BackendUnavailableError("Piper MuJoCo model has no link6 wrist body")
-        if not WRIST_URDF.exists() or not WRIST_D435_MESH.exists() or not WRIST_STAND_MESH.exists():
-            raise BackendUnavailableError("Pinned Piper D435 URDF or mesh asset is missing")
-        urdf_root = ET.parse(WRIST_URDF).getroot()
-        joints = {joint.get("name"): joint for joint in urdf_root.findall("joint")}
-
-        def origin(joint_name: str) -> tuple[list[float], list[float]]:
-            element = joints[joint_name].find("origin")
-            if element is None:
-                return [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
-            xyz = [float(value) for value in element.get("xyz", "0 0 0").split()]
-            rpy = [float(value) for value in element.get("rpy", "0 0 0").split()]
-            return xyz, rpy
-
+        if not WRIST_D435_MESH.exists() or not WRIST_STAND_MESH.exists():
+            raise BackendUnavailableError("Pinned Piper D435i mesh assets are missing")
         def quat(rpy: list[float]) -> list[float]:
             roll, pitch, yaw = rpy
             cr, sr = math.cos(roll / 2), math.sin(roll / 2)
@@ -89,16 +88,57 @@ class MujocoBackend:
             return [cr * cp * cy + sr * sp * sy, sr * cp * cy - cr * sp * sy,
                     cr * sp * cy + sr * cp * sy, cr * cp * sy - sr * sp * cy]
 
-        def quat_mul(first: list[float], second: list[float]) -> list[float]:
-            aw, ax, ay, az = first
-            bw, bx, by, bz = second
-            return [aw * bw - ax * bx - ay * by - az * bz,
-                    aw * bx + ax * bw + ay * bz - az * by,
-                    aw * by - ax * bz + ay * bw + az * bx,
-                    aw * bz + ax * by - ay * bx + az * bw]
-
         def values(items: list[float]) -> str:
             return " ".join(f"{item:.9g}" for item in items)
+
+        def mat_mul(first, second):
+            return [[sum(first[row][k] * second[k][column] for k in range(4))
+                     for column in range(4)] for row in range(4)]
+
+        def rpy_matrix(rpy):
+            roll, pitch, yaw = rpy
+            cr, sr = math.cos(roll), math.sin(roll)
+            cp, sp = math.cos(pitch), math.sin(pitch)
+            cy, sy = math.cos(yaw), math.sin(yaw)
+            return [
+                [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr, 0.0],
+                [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr, 0.0],
+                [-sp, cp * sr, cp * cr, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+
+        def transform_xyz_rpy(xyz, rpy):
+            transform = rpy_matrix(rpy)
+            for index, value in enumerate(xyz):
+                transform[index][3] = value
+            return transform
+
+        def matrix_quat(transform):
+            trace = transform[0][0] + transform[1][1] + transform[2][2]
+            if trace > 0.0:
+                scale = math.sqrt(trace + 1.0) * 2.0
+                return [0.25 * scale,
+                        (transform[2][1] - transform[1][2]) / scale,
+                        (transform[0][2] - transform[2][0]) / scale,
+                        (transform[1][0] - transform[0][1]) / scale]
+            diagonal = [transform[0][0], transform[1][1], transform[2][2]]
+            pivot = max(range(3), key=lambda index: diagonal[index])
+            next_index = (pivot + 1) % 3
+            last_index = (pivot + 2) % 3
+            scale = math.sqrt(max(0.0, 1.0 + diagonal[pivot] - diagonal[next_index] - diagonal[last_index])) * 2.0
+            result = [0.0, 0.0, 0.0, 0.0]
+            result[pivot + 1] = 0.25 * scale
+            result[0] = (transform[last_index][next_index] - transform[next_index][last_index]) / scale
+            result[next_index + 1] = (transform[next_index][pivot] + transform[pivot][next_index]) / scale
+            result[last_index + 1] = (transform[last_index][pivot] + transform[pivot][last_index]) / scale
+            return result
+
+        def body_from_transform(parent, name, transform):
+            return ET.SubElement(parent, "body", name=name,
+                                 pos=values([transform[0][3], transform[1][3], transform[2][3]]),
+                                 quat=values(matrix_quat(transform)))
+
+        ordinary_from_v100 = [list(row) for row in ORDINARY_LINK6_FROM_V100_LINK6]
 
         asset = root.find("asset")
         if asset is None:
@@ -106,46 +146,57 @@ class MujocoBackend:
             root.insert(0, asset)
         d435_obj = self._dae_to_obj(WRIST_D435_MESH)
         stand_obj = self._dae_to_obj(WRIST_STAND_MESH)
-        ET.SubElement(asset, "mesh", name="wrist_camera_d435", file=str(d435_obj))
-        ET.SubElement(asset, "mesh", name="wrist_camera_stand", file=str(stand_obj),
+        ET.SubElement(asset, "mesh", name="d435i_housing", file=str(d435_obj))
+        ET.SubElement(asset, "mesh", name="d435i_printed_stand", file=str(stand_obj),
                       scale="0.001 0.001 0.001")
 
-        stand_xyz, stand_rpy = origin("camera_stand_joint")
-        # In the reverse-X view the official stand is low and to the right.
-        # Move it 5 cm along each of the wrist-local left/up axes while keeping
-        # the official fixed-joint orientation and the prior orientation fix.
-        stand_xyz[1] += 0.05
-        stand_xyz[2] += 0.05
-        # The upstream URDF mount is mirrored relative to the MuJoCo wrist
-        # convention. Apply the requested local CCW Z quarter-turn followed by
-        # the stand's local Y quarter-turn, keeping its official translation.
-        stand_quat = quat_mul(quat_mul(quat(stand_rpy), quat([0, 0, math.pi / 2])),
-                              quat([0, math.pi / 2, 0]))
-        stand = ET.SubElement(link6, "body", name="camera_stand_link",
-                              pos=values(stand_xyz), quat=values(stand_quat))
-        ET.SubElement(stand, "geom", type="mesh", mesh="wrist_camera_stand",
+        # The printed stand is authored directly in the ordinary model's
+        # link6 frame.  Applying the V100-to-ordinary conversion here shifts
+        # the bracket away from the camera, even though the camera itself is
+        # already positioned correctly.
+        stand_transform = transform_xyz_rpy([-0.032, -0.003, 0.018], [0.0, 3.14, 1.57])
+        stand = body_from_transform(link6, "camera_stand_link", stand_transform)
+        ET.SubElement(stand, "geom", type="mesh", mesh="d435i_printed_stand",
                       contype="0", conaffinity="0")
 
-        mount_xyz, mount_rpy = origin("d435_camera_joint")
-        # Rotate the complete D435 mount position around link6's local +X axis.
-        # This preserves the camera-to-wrist distance and moves it from the
-        # lateral side to the top in the requested reverse-X view.
-        mount_xyz = [mount_xyz[0], -mount_xyz[2], mount_xyz[1]]
-        mount_quat = quat_mul(quat(mount_rpy), quat([math.pi / 2, 0, 0]))
-        mount = ET.SubElement(link6, "body", name="d435_camera_link",
-                              pos=values(mount_xyz), quat=values(mount_quat))
-        link_xyz, link_rpy = origin("camera_link_joint")
-        camera_link = ET.SubElement(mount, "body", name="camera_link",
-                                    pos=values(link_xyz), quat=values(quat(link_rpy)))
-        ET.SubElement(camera_link, "geom", type="mesh", mesh="wrist_camera_d435",
+        mount_v100 = transform_xyz_rpy([-0.029, 0.065, 0.022], [0.0, -1.22, -1.57])
+        mount = body_from_transform(link6, "d435i_link", mat_mul(ordinary_from_v100, mount_v100))
+        camera_link = ET.SubElement(mount, "body", name="d435i_camera_link",
+                                    pos="0.0106 0.0175 0.0125")
+        # MuJoCo requires every dynamic body to have a positive mass.  The
+        # camera is fixed and non-colliding, so use a negligible inertial proxy
+        # instead of letting the visual mesh change the Piper dynamics.
+        ET.SubElement(camera_link, "inertial", pos="0 0 0", mass="1e-6",
+                      diaginertia="1e-9 1e-9 1e-9")
+        ET.SubElement(camera_link, "geom", type="mesh", mesh="d435i_housing",
                       pos="0.0043 -0.0175 0", quat=values(quat([math.pi / 2, 0, math.pi / 2])),
-                      contype="0", conaffinity="0")
-        # Use the RealSense optical-frame convention from _d435.urdf.xacro.
-        # ROS optical (+Z forward, +Y down) to MuJoCo camera (-Z forward, +Y up).
-        optical_quat = quat_mul(quat([-math.pi / 2, 0, -math.pi / 2]), quat([math.pi, 0, 0]))
-        camera_quat = quat_mul(optical_quat, quat([0, 0, math.pi / 2]))
-        ET.SubElement(camera_link, "camera", name="wrist_camera", pos="0 0 0",
-                      quat=values(camera_quat), fovy="60")
+                      contype="0", conaffinity="0", density="0")
+        def fixed_frame(parent, name, pos="0 0 0", rpy=None):
+            return ET.SubElement(parent, "body", name=name, pos=pos,
+                                 quat=values(quat(rpy or [0.0, 0.0, 0.0])))
+
+        depth = fixed_frame(camera_link, "d435i_depth_frame")
+        depth_optical = fixed_frame(depth, "d435i_depth_optical_frame", rpy=[-math.pi / 2, 0.0, -math.pi / 2])
+        color = fixed_frame(camera_link, "d435i_color_frame", pos="0 0.015 0")
+        color_optical = fixed_frame(color, "d435i_color_optical_frame", rpy=[-math.pi / 2, 0.0, -math.pi / 2])
+        infra1 = fixed_frame(camera_link, "d435i_infra1_frame")
+        fixed_frame(infra1, "d435i_infra1_optical_frame", rpy=[-math.pi / 2, 0.0, -math.pi / 2])
+        infra2 = fixed_frame(camera_link, "d435i_infra2_frame", pos="0 -0.05 0")
+        fixed_frame(infra2, "d435i_infra2_optical_frame", rpy=[-math.pi / 2, 0.0, -math.pi / 2])
+        accel = fixed_frame(camera_link, "d435i_accel_frame", pos="-0.01174 -0.00552 0.0051")
+        fixed_frame(accel, "d435i_accel_optical_frame", rpy=[-math.pi / 2, 0.0, -math.pi / 2])
+        gyro = fixed_frame(camera_link, "d435i_gyro_frame", pos="-0.01174 -0.00552 0.0051")
+        fixed_frame(gyro, "d435i_gyro_optical_frame", rpy=[-math.pi / 2, 0.0, -math.pi / 2])
+        # MuJoCo cameras look along local -Z with local +Y as up.  ROS optical
+        # frames look along +Z with +Y down, so a pi rotation about X converts
+        # the optical frame convention without changing the camera origin.
+        optical_to_mujoco = values(quat([math.pi, 0.0, 0.0]))
+        ET.SubElement(color_optical, "camera", name="d435i_color_optical_camera",
+                      pos="0 0 0", quat=optical_to_mujoco, fovy="60")
+        # Render depth from the color optical pose so the returned depth is
+        # color-aligned, matching the RealSense ``align(color)`` stream.
+        ET.SubElement(color_optical, "camera", name="d435i_depth_optical_camera",
+                      pos="0 0 0", quat=optical_to_mujoco, fovy="60")
         temp = tempfile.NamedTemporaryFile(prefix="piper_wrist_", suffix=".xml", dir=self.model_path.parent, delete=False)
         tree.write(temp.name, encoding="utf-8", xml_declaration=True)
         temp.close()

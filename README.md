@@ -1,6 +1,6 @@
 # Piper Control
 
-统一的 Piper 机械臂 Python API、MuJoCo 仿真、Piper 真机和 D435/D435i RGB-D 接口。
+统一的 Piper 机械臂 Python API、MuJoCo 仿真、Piper 真机和 D435i RGB-D 接口。
 
 ## 上游版本
 
@@ -77,7 +77,7 @@ piper move-joints --backend mujoco \
   --j1 0.1 --j2 0.2 --j3 -0.2 --j4 0 --j5 0 --j6 0
 ```
 
-腕部支架和 D435 相机的固定关系来自上游 `piper_description_v100_realsense_camera_v2.urdf`，D435 模型参数来自上游 `realsense2_description/urdf/_d435.urdf.xacro`；MuJoCo 运行时只做 DAE 到 OBJ 的格式转换，不重新定义几何模型。
+MuJoCo 使用官方普通 Piper 带夹爪 XML 作为机械臂主体，在运行时附加官方 Isaac 资源中的打印支架和 D435 外壳。D435i 的 RGB、Depth、双红外和 IMU 坐标链采用上游 `realsense2_description` 的 nominal extrinsics；机械臂本体的关节、夹爪和 FK 不会因相机附加物改变。
 
 ## 开发
 
