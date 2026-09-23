@@ -70,6 +70,12 @@ def _description(path: Path) -> ET.Element:
 
 
 def build_piper_scene(path: Path = DEFAULT_MODEL) -> ET.ElementTree:
+    try:
+        import mujoco
+    except ImportError:
+        shell_inertia_supported = False
+    else:
+        shell_inertia_supported = hasattr(mujoco.mjtMeshInertia, "mjMESH_INERTIA_SHELL")
     robot = _description(path)
     links = {link.attrib["name"]: link for link in robot.findall("link")}
     joints = {joint.attrib["name"]: joint for joint in robot.findall("joint")}
@@ -165,6 +171,8 @@ def build_piper_scene(path: Path = DEFAULT_MODEL) -> ET.ElementTree:
                 attributes = {key: value for key, value in converted.items() if key != "rgba"}
                 if mesh.get("scale"):
                     attributes["scale"] = mesh.attrib["scale"]
+                if shell_inertia_supported:
+                    attributes["inertia"] = "shell"
                 ET.SubElement(asset, "mesh", name=mesh_name, **attributes)
                 # Lambert diffuse colors have no specular lobe. Do not map
                 # COLLADA reflectivity onto MuJoCo's unrelated mirror setting.

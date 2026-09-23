@@ -10,7 +10,7 @@ MOUNT_NAME = "piper_mount"
 
 
 def _set_visual_mesh_shell_inertia(spec, mujoco) -> None:
-    shell = getattr(mujoco.mjtMeshInertia, "mjINERTIA_SHELL", None)
+    shell = getattr(mujoco.mjtMeshInertia, "mjMESH_INERTIA_SHELL", None)
     if shell is None:
         return
     visual_meshes = {
