@@ -110,7 +110,7 @@ def build_piper_scene(path: Path = DEFAULT_MODEL) -> ET.ElementTree:
     def add_link(parent: ET.Element, joint: ET.Element) -> None:
         name = joint.find("child").attrib["link"]
         link = links[name]
-        body = ET.SubElement(parent, "body", name=name, **_origin(joint))
+        body = ET.SubElement(parent, "body", name=name, gravcomp="1", **_origin(joint))
         joint_type = joint.attrib["type"]
         if joint_type != "fixed":
             if joint_type not in ("revolute", "prismatic"):
@@ -118,6 +118,7 @@ def build_piper_scene(path: Path = DEFAULT_MODEL) -> ET.ElementTree:
             limit = joint.find("limit")
             ET.SubElement(body, "joint", name=joint.attrib["name"],
                           type="hinge" if joint_type == "revolute" else "slide",
+                          actuatorgravcomp="true",
                           axis=joint.find("axis").attrib["xyz"],
                           range=f"{limit.attrib['lower']} {limit.attrib['upper']}")
         inertial = link.find("inertial")
@@ -157,6 +158,12 @@ def build_piper_scene(path: Path = DEFAULT_MODEL) -> ET.ElementTree:
     if not world.findall("body"):
         raise ValueError("Expected the Piper world_to_base_link fixed joint")
 
+    # MuJoCo's automatic parent-child collision filter exempts world-welded
+    # parents. The fixed base and link1 mounting meshes overlap by 6 mm, so
+    # explicitly exclude this adjacent pair rather than generating joint1 drag.
+    contact = ET.SubElement(root, "contact")
+    ET.SubElement(contact, "exclude", body1="base_link", body2="link1")
+
     equality = ET.SubElement(root, "equality")
     ET.SubElement(equality, "joint", name="gripper_mimic", joint1=FINGER_JOINTS[1],
                   joint2=FINGER_JOINTS[0], polycoef="0 -1 0 0 0",
@@ -167,8 +174,13 @@ def build_piper_scene(path: Path = DEFAULT_MODEL) -> ET.ElementTree:
     damping = (20, 20, 10, 2, 2, 1, 2, 2)
     for name, kp, damp in zip((*ARM_JOINTS, *FINGER_JOINTS), gains, damping):
         limit = joints[name].find("limit")
-        root.find(f".//body/joint[@name='{name}']").set("damping", str(damp))
         effort = float(limit.attrib["effort"])
+        joint = root.find(f".//body/joint[@name='{name}']")
+        joint.set("damping", str(damp))
+        # Joint-level clamping also includes gravity compensation, which is
+        # added after the individual position actuator's force calculation.
+        joint.set("actuatorfrcrange", _numbers((-effort, effort)))
+        joint.set("actuatorfrclimited", "true")
         ET.SubElement(actuator, "position", name=name, joint=name, kp=str(kp),
                       ctrlrange=f"{limit.attrib['lower']} {limit.attrib['upper']}",
                       forcerange=_numbers((-effort, effort)))

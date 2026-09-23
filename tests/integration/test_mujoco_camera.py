@@ -75,8 +75,12 @@ def test_camera_attachment_does_not_change_piper_fk():
     plain.connect()
     with_camera.connect()
     try:
-        plain.move_joints(q)
-        with_camera.move_joints(q)
+        # Static camera geometry test: seed test states directly, outside the
+        # command API whose targets now require physical stepping.
+        import mujoco
+        for backend in (plain, with_camera):
+            backend.data.qpos[backend._arm_qpos] = q
+            mujoco.mj_forward(backend.model, backend.data)
         plain_link6 = plain.model.body("link6").id
         camera_link6 = with_camera.model.body("link6").id
         np.testing.assert_allclose(plain.data.xpos[plain_link6], with_camera.data.xpos[camera_link6], atol=1e-12)
@@ -95,7 +99,9 @@ def test_camera_mount_is_fixed_to_link6_across_joint_angles():
         stand = backend.model.body("camera_stand_link").id
         relative = []
         for q in (np.array([0.0, 0.2, -0.8, 0.0, 0.0, 0.0]), np.array([0.4, 0.8, -1.5, 0.2, -0.4, 1.0])):
-            backend.move_joints(q)
+            import mujoco
+            backend.data.qpos[backend._arm_qpos] = q
+            mujoco.mj_forward(backend.model, backend.data)
             link_rotation = backend.data.xmat[link6].reshape(3, 3)
             relative.append((
                 link_rotation.T @ (backend.data.xpos[camera] - backend.data.xpos[link6]),

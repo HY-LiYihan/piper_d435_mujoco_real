@@ -1,3 +1,3 @@
-from .ik import IKResult, NumericalIK
+from .ik import IKResult, PinocchioIK
 
-__all__ = ["IKResult", "NumericalIK"]
+__all__ = ["IKResult", "PinocchioIK"]

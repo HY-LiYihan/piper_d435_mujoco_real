@@ -34,17 +34,23 @@ def reference_arm():
 def test_fk_and_arm_parameters_match_official_urdf(backend):
     reference = reference_arm()
     data = mujoco.MjData(reference)
+    scratch = mujoco.MjData(backend.model)
     rng = np.random.default_rng(1729)
     configurations = [np.zeros(6), np.array([0.2, 0.8, -1.2, 0.2, -0.3, 0.4])]
     configurations.extend(rng.uniform(reference.jnt_range[:, 0], reference.jnt_range[:, 1], (12, 6)))
     for q in configurations:
-        backend.move_joints(q)
+        # This is a static FK comparison on scratch data, not a motion command.
+        scratch.qpos[backend._arm_qpos] = q
+        mujoco.mj_forward(backend.model, scratch)
         data.qpos[:] = q
         mujoco.mj_forward(reference, data)
+        pin_pose = backend.ik.forward(q)
+        np.testing.assert_allclose(pin_pose.position, data.xpos[reference.body("link6").id], atol=1e-10)
+        assert abs(np.dot(pin_pose.quaternion, data.xquat[reference.body("link6").id])) > 1 - 1e-10
         for name in ("base_link", *(f"link{i}" for i in range(1, 7))):
             expected, actual = reference.body(name).id, backend.model.body(name).id
-            np.testing.assert_allclose(backend.data.xpos[actual], data.xpos[expected], atol=1e-10)
-            np.testing.assert_allclose(backend.data.xmat[actual], data.xmat[expected], atol=1e-10)
+            np.testing.assert_allclose(scratch.xpos[actual], data.xpos[expected], atol=1e-10)
+            np.testing.assert_allclose(scratch.xmat[actual], data.xmat[expected], atol=1e-10)
             np.testing.assert_allclose(backend.model.body_mass[actual], reference.body_mass[expected])
             np.testing.assert_allclose(backend.model.body_ipos[actual], reference.body_ipos[expected])
             np.testing.assert_allclose(backend.model.body_inertia[actual], reference.body_inertia[expected])
@@ -55,7 +61,8 @@ def test_fk_and_arm_parameters_match_official_urdf(backend):
         np.testing.assert_allclose(backend.model.actuator_ctrlrange[backend.model.actuator(name).id], expected_range)
     # Specifically catch the old asymmetric joint1 limit.
     backend.move_joints([2.5, 0.5, -0.5, 0, 0, 0])
-    assert backend.state().joints.positions[0] == pytest.approx(2.5)
+    assert backend.data.ctrl[backend._arm_actuators[0]] == pytest.approx(2.5)
+    assert backend.state().joints.positions[0] == pytest.approx(0)
 
 
 def test_arm_meshes_only_reference_new_repository():
@@ -76,10 +83,10 @@ def test_new_flange_and_gripper_geometry_and_opening(backend):
         np.testing.assert_allclose(model.body(name).pos, [0, 0, 0.138])
     for width in (0.0, 0.02, 0.07, 0.1):
         backend.gripper(width)
-        assert backend.state().joints.gripper == pytest.approx(width)
         for name, sign in (("gripper_joint1", 1), ("gripper_joint2", -1)):
-            adr = model.jnt_qposadr[model.joint(name).id]
-            assert data.qpos[adr] == pytest.approx(sign * width / 2)
+            assert data.ctrl[model.actuator(name).id] == pytest.approx(sign * width / 2)
+        backend.wait_until_idle()
+        assert backend.state().joints.gripper == pytest.approx(width, abs=5e-4)
     for invalid in (-0.001, 0.101, float("nan")):
         with pytest.raises(ValueError):
             backend.gripper(invalid)

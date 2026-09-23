@@ -15,7 +15,7 @@ class PiperRobot:
 
     @classmethod
     def connect(cls, backend: str = "mujoco", config: dict[str, Any] | None = None) -> "PiperRobot":
-        config = config or {}
+        config = dict(config or {})
         if backend == "mujoco":
             socket_path = config.pop("socket_path", None)
             scene = SceneClient(socket_path=socket_path)
@@ -53,3 +53,17 @@ class PiperRobot:
 
     def stop(self) -> None:
         self._backend.stop()
+
+    def step(self, steps: int = 1) -> None:
+        """Advance a standalone MuJoCo simulation explicitly."""
+        method = getattr(self._backend, "step", None)
+        if method is None:
+            raise NotImplementedError("Explicit stepping is only available on a standalone MuJoCo backend")
+        method(steps)
+
+    def wait_until_idle(self, timeout: float = 10.0) -> None:
+        """Wait for measured simulation motion to settle, not just command acceptance."""
+        method = getattr(self._backend, "wait_until_idle", None)
+        if method is None:
+            raise NotImplementedError("Waiting for motion is not implemented by this backend")
+        method(timeout)

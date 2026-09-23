@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 from typing import Annotated
@@ -21,14 +20,14 @@ def _robot(backend: str, can_name: str):
 def _run_scene_host(duration: float) -> None:
     """Host the shared MuJoCo scene; on macOS re-exec through mjpython for the viewer."""
     if sys.platform == "darwin" and not os.environ.get("PIPER_MUJOCO_GUI_REEXEC"):
-        mjpython = shutil.which("mjpython")
-        if not mjpython:
-            raise RuntimeError("macOS MuJoCo GUI requires mjpython; install the MuJoCo Python runtime first")
+        mjpython = Path(sys.executable).with_name("mjpython")
+        if not mjpython.is_file():
+            raise RuntimeError("Install piper-control[mujoco] in this Python environment to provide mjpython")
         environment = os.environ.copy()
         environment["PIPER_MUJOCO_GUI_REEXEC"] = "1"
         source_root = str(Path(__file__).resolve().parents[1])
         environment["PYTHONPATH"] = source_root + os.pathsep + environment.get("PYTHONPATH", "")
-        subprocess.run([mjpython, "-m", "piper_control.mujoco_gui", "--duration", str(duration)],
+        subprocess.run([str(mjpython), "-m", "piper_control.mujoco_gui", "--duration", str(duration)],
                        env=environment, check=True)
         return
     from .mujoco_gui import run_host
@@ -89,7 +88,9 @@ def move_joints(
     robot = _robot(backend, can_name)
     try:
         robot.move_joints([j1, j2, j3, j4, j5, j6])
-        typer.echo(json.dumps({"joints_rad": [j1, j2, j3, j4, j5, j6]}, indent=2))
+        if backend == "mujoco":
+            robot.wait_until_idle()
+        typer.echo(json.dumps({"joints_rad": robot.state().joints.positions.tolist()}, indent=2))
     finally:
         robot.disconnect()
 
@@ -113,6 +114,8 @@ def move_p(
         elif any(value is None for value in quaternion):
             raise typer.BadParameter("provide all four quaternion options or none")
         robot.move_p(Pose((x, y, z), tuple(float(value) for value in quaternion)))
+        if backend == "mujoco":
+            robot.wait_until_idle()
         current = robot.state().pose
         if current is not None:
             typer.echo(json.dumps(_pose_dict(current), indent=2))
@@ -125,6 +128,8 @@ def gripper(width: float, effort: float | None = None, backend: str = "mujoco", 
     robot = _robot(backend, can_name)
     try:
         robot.gripper(width, effort)
+        if backend == "mujoco":
+            robot.wait_until_idle()
         typer.echo(json.dumps({"gripper_width_m": robot.state().joints.gripper}, indent=2))
     finally:
         robot.disconnect()

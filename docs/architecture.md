@@ -2,7 +2,23 @@
 
 `PiperRobot` exposes one typed facade. A backend implements robot lifecycle, state, joint/cartesian motion, gripper and stop.
 
-The real backend delegates Cartesian `move_p` to the pinned Piper SDK/firmware. The MuJoCo backend solves Cartesian targets with damped least-squares IK using MuJoCo Jacobians, then drives the model position actuators.
+The real backend delegates Cartesian `move_p` to the pinned Piper SDK/firmware.
+The MuJoCo backend uses Pinocchio on the official six-axis Piper URDF. The IK
+solver uses an SE(3) logarithmic residual, its matching local frame Jacobian,
+damped least squares, bounded steps, backtracking and deterministic restarts.
+Position and orientation convergence are tested separately (metres/radians),
+including large orientation errors. Joint limits are enforced during solving.
+Pinocchio is installed as the `pin` Python package; no new Git repository is needed.
+
+IK only returns joint targets. Commands write `data.ctrl`, while `mj_step` alone
+advances the live configuration and velocity. IK never holds or mutates the live
+MuJoCo data. State reports measured positions, velocities and tracking status.
+The GUI owns stepping for the shared scene; standalone clients can step or wait
+explicitly. CLI commands wait for motion to settle before reporting a result.
+The GUI batches physical timesteps against elapsed wall time and refreshes the
+viewer at about 60 Hz; pacing waits happen outside the shared-scene lock.
+Custom MJCF overrides require a matching `ik_urdf`: connect checks the two FK
+models on scratch data and rejects a mismatch instead of executing incorrect IK.
 
 `backends/piper_model.py` builds MJCF at startup from the pinned
 `agx_arm_urdf/piper/urdf/piper_with_gripper_description.xacro` and its base URDF.
@@ -18,8 +34,14 @@ Joint/actuator addresses in the backend are resolved by name.
 Simulation-specific position gains, damping, effort limits and the implicitfast
 integrator are configured in the adapter. Effort/control limits follow the URDF;
 gains and damping are local tuning, not manufacturer controller parameters.
-The public state-command API sets positions immediately; explicit physics stepping
-can have gravity-induced servo error. No collision-aware motion planning is added.
+Body gravity compensation is routed through the joint actuators using
+`actuatorgravcomp`, so actuator force limits still apply. Joint damping provides
+velocity feedback; position targets evolve through physical integration, with
+inertia, contacts and force limits retained. No collision-aware motion planning
+or trajectory generator is added; IK supplies a target, not a collision-free path.
+Only the base/link1 adjacent mounting pair is explicitly excluded from contact:
+their upstream meshes overlap at the joint, and MuJoCo's default parent-child
+filter does not cover the world-welded base. Other collision pairs remain enabled.
 
 The old `piper_isaac_sim` repository is read only for `d435.dae` and
 `realsense_mid_stand.dae` on the default path. Camera attachment transforms stay

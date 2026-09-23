@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from contextlib import nullcontext
 import tempfile
 import time
 import xml.etree.ElementTree as ET
@@ -8,8 +9,8 @@ import math
 import numpy as np
 from ..api.types import JointState, Pose, RobotState
 from ..errors import BackendUnavailableError, IKError, NotConnectedError
-from ..kinematics.ik import NumericalIK
-from .piper_model import DEFAULT_MODEL, ARM_JOINTS, FINGER_JOINTS, build_piper_scene
+from ..kinematics.ik import PinocchioIK
+from .piper_model import ASSET_ROOT, DEFAULT_MODEL, ARM_JOINTS, FINGER_JOINTS, build_piper_scene
 
 
 WRIST_D435_MESH = Path(__file__).parents[3] / "vendor/piper_isaac_sim/realsense2_description/meshes/d435.dae"
@@ -29,17 +30,18 @@ ORDINARY_LINK6_FROM_V100_LINK6 = (
 
 class MujocoBackend:
     def __init__(self, model_path: str | Path = DEFAULT_MODEL, realtime: bool = False,
-                 settle_steps: int = 200, wrist_camera: bool = True, **_: object):
+                 settle_steps: int = 200, wrist_camera: bool = True,
+                 ik_urdf: str | Path = ASSET_ROOT / "piper/urdf/piper_description.urdf", **_: object):
         self.model_path = Path(model_path)
         self.realtime = realtime
         if settle_steps < 1:
             raise ValueError("settle_steps must be positive")
         self.settle_steps = settle_steps
         self.wrist_camera = wrist_camera
+        self.ik_urdf = Path(ik_urdf)
         self._temporary_files: list[Path] = []
         self.model = self.data = self.ik = None
         self._connected = False
-        self._last = time.monotonic()
 
     def connect(self) -> None:
         try:
@@ -85,8 +87,22 @@ class MujocoBackend:
         self._gripper_max_width = float(min(finger_limits[0, 1], -finger_limits[1, 0]) * 2)
         lower = self.model.jnt_range[joint_ids, 0].copy()
         upper = self.model.jnt_range[joint_ids, 1].copy()
-        body_id = self.model.body("link6").id
-        self.ik = NumericalIK(self.model, self.data, joint_ids, body_id, lower, upper)
+        self.ik = PinocchioIK(self.ik_urdf)
+        self.ik.lower = np.maximum(self.ik.lower, lower)
+        self.ik.upper = np.minimum(self.ik.upper, upper)
+        if np.any(self.ik.lower >= self.ik.upper):
+            raise ValueError("Pinocchio and MuJoCo joint limits do not overlap")
+        # Check custom MJCF/URDF pairs on scratch data, never the live scene.
+        scratch = mujoco.MjData(self.model)
+        for q in (np.zeros(6), np.array([.2, .6, -1., .2, -.3, .4])):
+            scratch.qpos[self._arm_qpos] = q
+            mujoco.mj_forward(self.model, scratch)
+            expected = self.ik.forward(q)
+            body = self.model.body("link6").id
+            actual_quat = scratch.xquat[body]
+            if (not np.allclose(expected.position, scratch.xpos[body], atol=1e-7, rtol=0)
+                    or abs(float(np.dot(expected.quaternion, actual_quat))) < 1 - 1e-10):
+                raise ValueError("Pinocchio URDF and MuJoCo link6 kinematics disagree; provide matching ik_urdf")
         mujoco.mj_forward(self.model, self.data)
         self._connected = True
 
@@ -153,6 +169,7 @@ class MujocoBackend:
 
         def body_from_transform(parent, name, transform):
             return ET.SubElement(parent, "body", name=name,
+                                 gravcomp="1",
                                  pos=values([transform[0][3], transform[1][3], transform[2][3]]),
                                  quat=values(matrix_quat(transform)))
 
@@ -288,16 +305,24 @@ class MujocoBackend:
             raise BackendUnavailableError("MuJoCo viewer is unavailable in this installation") from exc
         started = time.monotonic()
         with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
+            previous = time.monotonic()
+            remainder = 0.0
             while viewer.is_running():
-                if duration > 0 and time.monotonic() - started >= duration:
+                frame_start = time.monotonic()
+                if duration > 0 and frame_start - started >= duration:
                     break
-                if lock is not None:
-                    with lock:
-                        self._step(1)
-                        viewer.sync()
-                else:
-                    self._step(1)
+                # Run physics at its timestep, independently of viewer frame
+                # rate. Bound catch-up after UI pauses to keep commands responsive.
+                remainder += min(frame_start - previous, 0.1)
+                previous = frame_start
+                steps = int(remainder / self.model.opt.timestep)
+                remainder -= steps * self.model.opt.timestep
+                with lock if lock is not None else nullcontext():
+                    self._step(steps, pace=False)
                     viewer.sync()
+                delay = 1 / 60 - (time.monotonic() - frame_start)
+                if delay > 0:
+                    time.sleep(delay)
 
     def _require(self):
         if not self._connected or self.model is None or self.data is None:
@@ -307,16 +332,40 @@ class MujocoBackend:
         self._connected = False
         self.model = self.data = self.ik = None
 
-    def _step(self, steps: int = 1) -> None:
+    def _step(self, steps: int = 1, *, pace: bool = True) -> None:
+        self._require()
+        if not isinstance(steps, int) or steps < 0:
+            raise ValueError("steps must be a non-negative integer")
         import mujoco
+        started = time.monotonic()
         for _ in range(steps):
             mujoco.mj_step(self.model, self.data)
-        if self.realtime:
-            elapsed = time.monotonic() - self._last
+        if self.realtime and pace:
+            elapsed = time.monotonic() - started
             delay = max(0.0, self.model.opt.timestep * steps - elapsed)
             if delay:
                 time.sleep(delay)
-        self._last = time.monotonic()
+
+    def step(self, steps: int = 1) -> None:
+        """Advance physical simulation; movement commands only change controls."""
+        self._step(steps)
+
+    def wait_until_idle(self, timeout: float = 10.0) -> None:
+        """Advance a standalone simulation until settled, or raise on timeout.
+
+        The budget is simulation time, so this also works faster than real time.
+        Shared-scene clients wait while the GUI owns physics stepping instead.
+        """
+        self._require()
+        if not np.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be positive and finite")
+        steps = int(math.ceil(timeout / self.model.opt.timestep))
+        for _ in range(steps):
+            if not self.state().moving:
+                return
+            self._step(1)
+        if self.state().moving:
+            raise TimeoutError("MuJoCo motion did not settle before the timeout")
 
     def state(self) -> RobotState:
         self._require()
@@ -330,27 +379,28 @@ class MujocoBackend:
         # Copy: MuJoCo array slices alias the live simulation data, so a
         # returned JointState must be an independent snapshot.
         joints = JointState(self.data.qpos[self._arm_qpos].copy(), self.data.qvel[self._arm_dofs].copy(), gripper_width)
-        return RobotState(True, False, joints, pose)
+        arm_error = self.data.ctrl[self._arm_actuators] - joints.positions
+        finger_error = self.data.ctrl[self._finger_actuators] - fingers
+        moving = bool(np.max(np.abs(arm_error)) > 1e-3
+                      or np.max(np.abs(joints.velocities)) > 1e-2
+                      or np.max(np.abs(finger_error)) > 2e-4
+                      or np.max(np.abs(self.data.qvel[self._finger_dofs])) > 2e-3)
+        return RobotState(True, moving, joints, pose)
 
     def move_joints(self, joints) -> None:
         self._require()
         q = np.asarray(joints, dtype=float)
-        if q.shape != (6,):
-            raise ValueError("move_joints requires six joint values in radians")
+        if q.shape != (6,) or not np.isfinite(q).all():
+            raise ValueError("move_joints requires six finite joint values in radians")
         q = np.clip(q, self.ik.lower, self.ik.upper)
-        # The public API sets state immediately; explicit stepping then follows
-        # the position actuators and physical forces from this commanded state.
-        self.data.qpos[self._arm_qpos] = q
-        self.data.qvel[self._arm_dofs] = 0.0
+        # Position setpoints are control inputs, not measured joint positions.
         self.data.ctrl[self._arm_actuators] = q
-        import mujoco
-        mujoco.mj_forward(self.model, self.data)
 
     def move_p(self, pose: Pose) -> None:
         self._require()
         result = self.ik.solve(pose, seed=self.data.qpos[self._arm_qpos])
         if not result.success:
-            raise IKError(f"MuJoCo IK failed: {result.message}; position={result.position_error:.6g}")
+            raise IKError(f"Pinocchio IK failed: {result.message}; position={result.position_error:.6g}; orientation={result.orientation_error:.6g}")
         self.move_joints(result.joints)
 
     def gripper(self, width: float, effort: float | None = None) -> None:
@@ -358,11 +408,7 @@ class MujocoBackend:
         if not 0.0 <= width <= self._gripper_max_width:
             raise ValueError(f"gripper width must be between 0 and {self._gripper_max_width:g} metres")
         targets = [width / 2.0, -width / 2.0]
-        self.data.qpos[self._finger_qpos] = targets
-        self.data.qvel[self._finger_dofs] = 0.0
         self.data.ctrl[self._finger_actuators] = targets
-        import mujoco
-        mujoco.mj_forward(self.model, self.data)
 
     def stop(self) -> None:
         self._require()

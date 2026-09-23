@@ -16,7 +16,7 @@
 
 ```bash
 git submodule update --init --recursive
-pip install -e ".[mujoco,dev]"
+python -m pip install -e ".[mujoco,dev]"
 pip install -e ".[real,camera]"  # 需要真机/RealSense 时
 ```
 
@@ -27,9 +27,12 @@ from piper_control import PiperRobot
 
 robot = PiperRobot.connect("mujoco")
 robot.move_joints([0.2, 0.8, -1.2, 0.2, -0.3, 0.4])
+robot.wait_until_idle()
 target = robot.state().pose
 robot.move_joints([0.22, 0.82, -1.22, 0.22, -0.32, 0.42])
+robot.wait_until_idle()
 robot.move_p(target)
+robot.wait_until_idle()
 print(robot.state())
 robot.stop()
 robot.disconnect()
@@ -84,7 +87,9 @@ piper move-joints --backend mujoco \
 
 MuJoCo 启动时读取 `vendor/agx_arm_urdf/piper/urdf/piper_with_gripper_description.xacro` 及其引用的 `piper_description.urdf`，转换为仿真模型。关节坐标、限位、质量和惯量来自这些文件，显示和碰撞使用新仓库的 STL 网格，末端固定为 `link6`。法兰与夹爪结构来自新 Xacro；仿真夹爪开口范围为 0–0.10 m，两侧手指通过等式约束同步运动。
 
-位置执行器和阻尼由本项目配置。D435 外壳及打印支架仍使用旧 Isaac 仓库的两个 DAE 文件；相机安装变换和 nominal extrinsics 保留在本项目代码中，未做实机重新标定。真机 SDK 控制路径与原有 0–0.07 m 夹爪限制暂不改变。已经运行的 GUI/共享场景需重启才能加载新模型。
+IK 使用 Pinocchio（安装包名 `pin`），读取同一官方机械臂 URDF，求解末端 `link6` 的关节目标。`move_p`、`move_joints` 和 `gripper` 仅下发执行器控制目标，不改写实际关节位置或速度。GUI 持续推进物理仿真；独立脚本可调用 `robot.step(n)` 或 `robot.wait_until_idle()`。CLI 运动命令会等待实际运动完成后返回；超时会报错，不会强制关节到位。`stop()` 下发当前位置保持目标，通过执行器减速。
+
+位置执行器、阻尼和经执行器限力的重力补偿由本项目配置。D435 外壳及打印支架仍使用旧 Isaac 仓库的两个 DAE 文件；相机安装变换和 nominal extrinsics 保留在本项目代码中，未做实机重新标定。真机 SDK/固件 IK 控制路径与原有 0–0.07 m 夹爪限制暂不改变。已经运行的 GUI/共享场景需重启才能加载新模型和控制逻辑。macOS GUI 使用当前 Python 环境旁的 `mjpython`，请在同一环境安装依赖。
 
 ## 开发
 

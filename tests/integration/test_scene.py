@@ -32,22 +32,30 @@ def _client(socket_path):
 
 
 def test_client_round_trip_joints_gripper_and_pose(scene):
-    _, socket_path = scene
+    server, socket_path = scene
     client = _client(socket_path)
     try:
         target = [0.1, 0.5, -0.5, 0.0, 0.0, 0.0]
         client.move_joints(target)
+        assert client.state().moving
+        np.testing.assert_array_equal(server.backend.data.qpos, np.zeros(8))
+        with server.lock:
+            server.backend.wait_until_idle()
         assert np.max(np.abs(client.state().joints.positions - target)) < 0.02
 
         client.gripper(0.03)
-        assert client.state().joints.gripper == pytest.approx(0.03)
+        with server.lock:
+            server.backend.wait_until_idle()
+        assert client.state().joints.gripper == pytest.approx(0.03, abs=5e-4)
 
         # Generate a reachable pose from the active model, then solve from a
         # nearby seed. The old model's hard-coded home position is no longer valid.
-        client.move_joints([0.2, 0.8, -1.2, 0.2, -0.3, 0.4])
-        target_pose = client.state().pose
-        client.move_joints([0.22, 0.82, -1.22, 0.22, -0.32, 0.42])
+        target_pose = server.backend.ik.forward([0.2, 0.8, -1.2, 0.2, -0.3, 0.4])
+        before = server.backend.data.qpos.copy()
         client.move_p(target_pose)
+        np.testing.assert_array_equal(server.backend.data.qpos, before)
+        with server.lock:
+            server.backend.wait_until_idle()
         pose = client.state().pose
         assert pose is not None
         assert np.linalg.norm(np.asarray(pose.position) - np.asarray(target_pose.position)) < 0.001

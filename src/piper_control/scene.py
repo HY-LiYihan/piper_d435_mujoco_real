@@ -279,6 +279,16 @@ class SceneClient:
         self._send({"cmd": "stop"})
         self._receive()
 
+    def wait_until_idle(self, timeout: float = 10.0) -> None:
+        """The GUI owns stepping; poll measured motion without holding its lock."""
+        if not np.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be positive and finite")
+        deadline = time.monotonic() + timeout
+        while self.state().moving:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Shared-scene motion did not settle before the timeout")
+            time.sleep(0.01)
+
     def read(self, width: int = 1280, height: int = 720) -> RGBDFrame:
         """Capture one aligned RGB-D frame from the shared scene."""
         self._send({"cmd": "camera", "width": width, "height": height})
