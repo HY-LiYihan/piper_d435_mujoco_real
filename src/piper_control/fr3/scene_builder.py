@@ -7,6 +7,19 @@ DEFAULT_SCENE = Path(__file__).parent / "assets/scenes/default.xml"
 MOUNT_NAME = "fr3_mount"
 
 
+def _set_visual_mesh_shell_inertia(spec, mujoco) -> None:
+    shell = getattr(mujoco.mjtMeshInertia, "mjINERTIA_SHELL", None)
+    if shell is None:
+        return
+    visual_meshes = {
+        geom.meshname for geom in spec.geoms
+        if geom.meshname and geom.contype == 0 and geom.conaffinity == 0
+    }
+    for mesh in spec.meshes:
+        if mesh.name in visual_meshes:
+            mesh.inertia = shell
+
+
 def _find_body(spec, name: str):
     body = getattr(spec, "body", None)
     if callable(body):
@@ -43,6 +56,7 @@ def compile_scene(model_path: Path, scene_path: Path):
 
     environment = mujoco.MjSpec.from_file(str(scene_path))
     robot = mujoco.MjSpec.from_file(str(model_path))
+    _set_visual_mesh_shell_inertia(robot, mujoco)
     environment.option.timestep = robot.option.timestep
     environment.option.integrator = robot.option.integrator
     environment.compiler.fusestatic = False

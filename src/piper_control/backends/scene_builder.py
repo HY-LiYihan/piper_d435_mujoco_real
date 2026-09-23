@@ -9,6 +9,19 @@ DEFAULT_SCENE = Path(__file__).parents[1] / "assets/scenes/default.xml"
 MOUNT_NAME = "piper_mount"
 
 
+def _set_visual_mesh_shell_inertia(spec, mujoco) -> None:
+    shell = getattr(mujoco.mjtMeshInertia, "mjINERTIA_SHELL", None)
+    if shell is None:
+        return
+    visual_meshes = {
+        geom.meshname for geom in spec.geoms
+        if geom.meshname and geom.contype == 0 and geom.conaffinity == 0
+    }
+    for mesh in spec.meshes:
+        if mesh.name in visual_meshes:
+            mesh.inertia = shell
+
+
 def _find_body(spec, name: str):
     body = getattr(spec, "body", None)
     if callable(body):
@@ -56,6 +69,7 @@ def compile_scene(robot: ET.ElementTree, path: Path):
 
     environment = mujoco.MjSpec.from_file(str(path))
     component = mujoco.MjSpec.from_string(ET.tostring(robot.getroot(), encoding="unicode"))
+    _set_visual_mesh_shell_inertia(component, mujoco)
     mount = _find_body(environment, MOUNT_NAME)
     robot_body = _find_body(component, "base_link")
     if mount is None:
