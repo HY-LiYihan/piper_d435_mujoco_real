@@ -161,7 +161,7 @@ def build_piper_scene(path: Path = DEFAULT_MODEL) -> ET.ElementTree:
                 attributes["scale"] = mesh.attrib["scale"]
             ET.SubElement(asset, "mesh", **attributes)
             ET.SubElement(body, "geom", name=f"{name}_geom{index}", type="mesh", mesh=mesh_name,
-                          group="3", rgba="0.79 0.82 0.93 1", **_origin(collision))
+                          group="3", rgba="0 0 0 0", **_origin(collision))
         for index, visual in enumerate(link.findall("visual")):
             mesh = visual.find("geometry/mesh")
             if mesh is None:

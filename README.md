@@ -177,7 +177,7 @@ robot_control move-joints \
   --j1 0.1 --j2 0.2 --j3 -0.2 --j4 0 --j5 0 --j6 0
 ```
 
-MuJoCo 启动时读取 `vendor/agx_arm_urdf/piper/urdf/piper_with_gripper_description.xacro` 及其引用的 `piper_description.urdf`，转换为仿真模型。关节坐标、限位、质量和惯量来自这些文件，末端固定为 `link6`。显示使用官方 `visual` 引用的 DAE 网格，保留部件变换、法线和材质颜色；转换器按颜色分组生成内嵌 MJCF 网格，无需额外依赖或手工生成资源。显示网格位于 group 1，关闭碰撞且质量为零；碰撞继续使用原有 STL，位于默认隐藏的 group 3（可在查看器中打开检查）。上游 DAE 没有图片贴图，本次恢复的是原有几何和材质颜色。法兰与夹爪结构来自新 Xacro；仿真夹爪开口范围为 0–0.10 m，两侧手指通过等式约束同步运动。
+MuJoCo 启动时读取 `vendor/agx_arm_urdf/piper/urdf/piper_with_gripper_description.xacro` 及其引用的 `piper_description.urdf`，转换为仿真模型。关节坐标、限位、质量和惯量来自这些文件，末端固定为 `link6`。显示使用官方 `visual` 引用的 DAE 网格，保留部件变换、法线和材质颜色；转换器按颜色分组生成内嵌 MJCF 网格，无需额外依赖或手工生成资源。显示网格位于 group 1，关闭碰撞且质量为零；碰撞继续使用原有 STL，位于 group 3 且完全透明，即使开启该显示组也不会将碰撞网格叠在夹爪外观上，物理碰撞不受影响。上游 DAE 没有图片贴图，本次恢复的是原有几何和材质颜色。法兰与夹爪结构来自新 Xacro；仿真夹爪开口范围为 0–0.10 m，两侧手指通过等式约束同步运动。
 
 IK 使用 Pinocchio（安装包名 `pin`），读取同一官方机械臂 URDF，求解末端 `link6` 的关节目标。`move_p`、`move_joints` 和 `gripper` 仅下发执行器控制目标，不改写实际关节位置或速度。GUI 持续推进物理仿真；独立脚本可调用 `robot.step(n)` 或 `robot.wait_until_idle()`。CLI 运动命令会等待实际运动完成后返回；超时会报错，不会强制关节到位。`stop()` 下发当前位置保持目标，通过执行器减速。
 

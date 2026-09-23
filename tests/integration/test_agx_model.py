@@ -89,6 +89,7 @@ def test_visuals_preserve_physics_and_use_official_colors():
         assert geom.attrib["mass"] == "0"
     for geom in root.findall(".//geom[@group='3']"):
         assert "contype" not in geom.attrib  # Keep the original contact defaults.
+        assert geom.attrib["rgba"] == "0 0 0 0"
     colored = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
     # Reconstruct the prior STL-only scene, including its original display group.
     for body in root.iter("body"):
