@@ -184,6 +184,10 @@ class MujocoBackend:
         ET.SubElement(asset, "mesh", name="d435i_housing", file=str(d435_obj))
         ET.SubElement(asset, "mesh", name="d435i_printed_stand", file=str(stand_obj),
                       scale="0.001 0.001 0.001")
+        ET.SubElement(asset, "material", name="d435i_silver_aluminum",
+                      rgba="0.70 0.72 0.75 1", specular="0.8", shininess="0.5")
+        ET.SubElement(asset, "material", name="d435i_black_print",
+                      rgba="0.025 0.025 0.025 1", specular="0.1", shininess="0.1")
 
         # The printed stand is authored directly in the ordinary model's
         # link6 frame.  Applying the V100-to-ordinary conversion here shifts
@@ -192,7 +196,7 @@ class MujocoBackend:
         stand_transform = transform_xyz_rpy([-0.032, -0.002, 0.025], [0.0, 3.14, 1.57])
         stand = body_from_transform(link6, "camera_stand_link", stand_transform)
         ET.SubElement(stand, "geom", type="mesh", mesh="d435i_printed_stand",
-                      contype="0", conaffinity="0")
+                      material="d435i_black_print", contype="0", conaffinity="0")
 
         mount_v100 = transform_xyz_rpy([-0.0315, 0.064, 0.027], [0.0, -1.22, -1.57])
         mount = body_from_transform(link6, "d435i_link", mat_mul(ordinary_from_v100, mount_v100))
@@ -204,6 +208,7 @@ class MujocoBackend:
         ET.SubElement(camera_link, "inertial", pos="0 0 0", mass="1e-6",
                       diaginertia="1e-9 1e-9 1e-9")
         ET.SubElement(camera_link, "geom", type="mesh", mesh="d435i_housing",
+                      material="d435i_silver_aluminum",
                       pos="0.0043 -0.0175 0", quat=values(quat([math.pi / 2, 0, math.pi / 2])),
                       contype="0", conaffinity="0", density="0")
         def fixed_frame(parent, name, pos="0 0 0", rpy=None):

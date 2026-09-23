@@ -1,8 +1,8 @@
 """Build MuJoCo's scene from the pinned AgileX Piper description.
 
 This adapter supports the concrete, include-only Piper gripper Xacro. It is
-not a general Xacro interpreter. Geometry uses the upstream collision STLs
-for both rendering and collision, avoiding a ROS or COLLADA runtime dependency.
+not a general Xacro interpreter. Collision uses upstream STLs; display uses
+the official DAE geometry, normals and material colors without a ROS runtime.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 
 from ..errors import BackendUnavailableError
+from .collada_visual import visual_meshes
 
 
 ASSET_ROOT = Path(__file__).parents[3] / "vendor/agx_arm_urdf"
@@ -101,6 +102,11 @@ def build_piper_scene(path: Path = DEFAULT_MODEL) -> ET.ElementTree:
     root = ET.Element("mujoco", model="agx_piper")
     ET.SubElement(root, "compiler", angle="radian", autolimits="true", fusestatic="false")
     ET.SubElement(root, "option", timestep="0.002", integrator="implicitfast")
+    visual_settings = ET.SubElement(root, "visual")
+    # Keep the official dark material values visible under the default viewer
+    # light, which was previously illuminating a uniformly pale STL model.
+    ET.SubElement(visual_settings, "headlight", ambient="0.3 0.3 0.3",
+                  diffuse="0.8 0.8 0.8", specular="0.5 0.5 0.5")
     asset = ET.SubElement(root, "asset")
     world = ET.SubElement(root, "worldbody")
     children: dict[str, list[ET.Element]] = {}
@@ -149,7 +155,24 @@ def build_piper_scene(path: Path = DEFAULT_MODEL) -> ET.ElementTree:
                 attributes["scale"] = mesh.attrib["scale"]
             ET.SubElement(asset, "mesh", **attributes)
             ET.SubElement(body, "geom", name=f"{name}_geom{index}", type="mesh", mesh=mesh_name,
-                          rgba="0.79 0.82 0.93 1", **_origin(collision))
+                          group="3", rgba="0.79 0.82 0.93 1", **_origin(collision))
+        for index, visual in enumerate(link.findall("visual")):
+            mesh = visual.find("geometry/mesh")
+            if mesh is None:
+                raise ValueError(f"Expected an upstream visual mesh for {name}")
+            for part, converted in enumerate(visual_meshes(_resource(mesh.attrib["filename"]))):
+                mesh_name = f"{name}_visual{index}_{part}"
+                attributes = {key: value for key, value in converted.items() if key != "rgba"}
+                if mesh.get("scale"):
+                    attributes["scale"] = mesh.attrib["scale"]
+                ET.SubElement(asset, "mesh", name=mesh_name, **attributes)
+                # Lambert diffuse colors have no specular lobe. Do not map
+                # COLLADA reflectivity onto MuJoCo's unrelated mirror setting.
+                ET.SubElement(asset, "material", name=mesh_name, rgba=converted["rgba"],
+                              specular="0", shininess="0")
+                ET.SubElement(body, "geom", name=mesh_name, type="mesh", mesh=mesh_name,
+                              material=mesh_name, group="1", contype="0", conaffinity="0",
+                              mass="0", **_origin(visual))
         for child in children.get(name, []):
             add_link(body, child)
 

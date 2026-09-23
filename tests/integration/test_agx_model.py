@@ -67,12 +67,59 @@ def test_fk_and_arm_parameters_match_official_urdf(backend):
 
 def test_arm_meshes_only_reference_new_repository():
     tree = build_piper_scene()
-    meshes = tree.findall("asset/mesh")
+    meshes = tree.findall("asset/mesh[@file]")
     assert len(meshes) == 11
     for mesh in meshes:
         path = Path(mesh.attrib["file"])
         assert path.is_relative_to(ASSET_ROOT.resolve())
         assert path.is_file()
+
+
+def test_visuals_preserve_physics_and_use_official_colors():
+    tree = build_piper_scene()
+    root = tree.getroot()
+    visuals = root.findall(".//geom[@group='1']")
+    assert visuals
+    colors = {tuple(float(v) for v in mat.attrib["rgba"].split())
+              for mat in root.findall("asset/material")}
+    assert (0.854902, 0.121569, 0.121569, 1.0) in colors
+    assert (0.113725, 0.113725, 0.113725, 1.0) in colors
+    for geom in visuals:
+        assert geom.attrib["contype"] == geom.attrib["conaffinity"] == "0"
+        assert geom.attrib["mass"] == "0"
+    for geom in root.findall(".//geom[@group='3']"):
+        assert "contype" not in geom.attrib  # Keep the original contact defaults.
+    colored = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
+    # Reconstruct the prior STL-only scene, including its original display group.
+    for body in root.iter("body"):
+        for geom in list(body.findall("geom")):
+            if geom in visuals:
+                body.remove(geom)
+            else:
+                geom.set("group", "0")
+    asset = root.find("asset")
+    for item in list(asset):
+        if item.tag == "material" or (item.tag == "mesh" and "file" not in item.attrib):
+            asset.remove(item)
+    original = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
+    for field in ("body_mass", "body_inertia", "body_ipos", "body_iquat", "body_pos",
+                  "body_quat", "body_gravcomp", "jnt_range", "dof_damping",
+                  "actuator_gainprm", "actuator_ctrlrange", "actuator_forcerange"):
+        np.testing.assert_allclose(getattr(colored, field), getattr(original, field), atol=1e-12)
+    for i in range(original.ngeom):
+        geom = colored.geom(original.geom(i).name).id
+        for field in ("geom_pos", "geom_quat", "geom_size", "geom_friction",
+                      "geom_contype", "geom_conaffinity", "geom_solref", "geom_solimp"):
+            np.testing.assert_allclose(getattr(colored, field)[geom], getattr(original, field)[i])
+    old_data, new_data = mujoco.MjData(original), mujoco.MjData(colored)
+    for data in (old_data, new_data):
+        data.ctrl[:] = [0.2, 0.8, -1.2, 0.2, -0.3, 0.4, 0.04, -0.04]
+    for _ in range(500):
+        mujoco.mj_step(original, old_data)
+        mujoco.mj_step(colored, new_data)
+        np.testing.assert_allclose(new_data.qpos, old_data.qpos, atol=1e-12, rtol=0)
+        np.testing.assert_allclose(new_data.qvel, old_data.qvel, atol=1e-12, rtol=0)
+        assert new_data.ncon == old_data.ncon
 
 
 def test_new_flange_and_gripper_geometry_and_opening(backend):

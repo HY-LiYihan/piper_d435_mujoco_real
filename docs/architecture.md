@@ -23,8 +23,15 @@ models on scratch data and rejects a mismatch instead of executing incorrect IK.
 `backends/piper_model.py` builds MJCF at startup from the pinned
 `agx_arm_urdf/piper/urdf/piper_with_gripper_description.xacro` and its base URDF.
 It expands this concrete include-only Xacro without ROS. Transforms, joint limits,
-inertial tensors and collision STL meshes come from that repository. The same STL
-surfaces are rendered; COLLADA materials are not imported. Fixed bodies including
+inertial tensors and collision STL meshes come from that repository.
+`backends/collada_visual.py` converts the official visual DAEs into inline MJCF
+meshes, preserving scene transforms, units, normals and Lambert diffuse colors.
+Equal colors are grouped per visual; conversion is cached in memory by source
+path, modification time and size. The adapter supports the pinned triangle/matrix
+COLLADA assets, not arbitrary COLLADA or image textures, and adds no dependencies.
+Display geoms use group 1 with zero mass and contact masks; unchanged collision
+STLs use group 3, hidden by default in both the viewer and RGB-D renderer.
+Fixed bodies including
 `flange_link` and `gripper_base` are retained, and the end-effector remains `link6`.
 The massless virtual `gripper` driver is eliminated; its +/-0.5 mimic relationship
 becomes a MuJoCo equality between the two physical finger joints. This keeps eight
