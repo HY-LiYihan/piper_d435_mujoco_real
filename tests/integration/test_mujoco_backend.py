@@ -13,10 +13,13 @@ def test_mujoco_model_loads_and_moves():
     backend.connect()
     try:
         assert backend.model.nq == 8
+        assert backend.state().joints.gripper == pytest.approx(0.07)
+        np.testing.assert_allclose(backend.data.qpos[backend._finger_qpos], [0.035, -0.035])
+        np.testing.assert_allclose(backend.data.ctrl[backend._finger_actuators], [0.035, -0.035])
         target = [0, 0.5, -0.5, 0, 0, 0]
         backend.move_joints(target)
         assert backend.state().moving
-        np.testing.assert_array_equal(backend.data.qpos, np.zeros(8))
+        np.testing.assert_array_equal(backend.data.qpos[backend._arm_qpos], np.zeros(6))
         np.testing.assert_allclose(backend.data.ctrl[backend._arm_actuators], target)
         backend.step(1)
         assert np.linalg.norm(backend.state().joints.positions) > 0

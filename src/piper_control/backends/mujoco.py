@@ -88,6 +88,10 @@ class MujocoBackend:
         self._finger_actuators = np.array([self.model.actuator(name).id for name in finger_names])
         finger_limits = self.model.jnt_range[finger_ids]
         self._gripper_max_width = float(min(finger_limits[0, 1], -finger_limits[1, 0]) * 2)
+        if self.model_path.suffix in (".urdf", ".xacro"):
+            opening = 0.07 / 2
+            self.data.qpos[self._finger_qpos] = (opening, -opening)
+            self.data.ctrl[self._finger_actuators] = (opening, -opening)
         lower = self.model.jnt_range[joint_ids, 0].copy()
         upper = self.model.jnt_range[joint_ids, 1].copy()
         self.ik = PinocchioIK(self.ik_urdf)

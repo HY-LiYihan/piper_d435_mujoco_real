@@ -39,7 +39,7 @@ def test_client_round_trip_joints_gripper_and_pose(scene):
         target = [0.1, 0.5, -0.5, 0.0, 0.0, 0.0]
         client.move_joints(target)
         assert client.state().moving
-        np.testing.assert_array_equal(server.backend.data.qpos, np.zeros(8))
+        np.testing.assert_array_equal(server.backend.data.qpos[server.backend._arm_qpos], np.zeros(6))
         with server.lock:
             server.backend.wait_until_idle()
         assert np.max(np.abs(client.state().joints.positions - target)) < 0.02
