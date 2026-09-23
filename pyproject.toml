@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "piper-control"
 version = "0.1.0"
-description = "Unified Python and CLI control for Piper real and MuJoCo backends"
+description = "Unified Piper and FR3 MuJoCo control, Piper real control and D435i RGB-D"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24", "typer>=0.9"]
 
 [project.optional-dependencies]
 # The pinned Pinocchio wheel links against urdfdom 4 and TinyXML2 10.
-mujoco = ["mujoco>=3.2.7", "pin==3.9.0", "cmeel-urdfdom>=4,<5", "cmeel-tinyxml2>=10,<11"]
+mujoco = ["mujoco>=3.2.7", "pin==3.9.0", "cmeel-urdfdom>=4,<5", "cmeel-tinyxml2>=10,<11", "Pillow>=10"]
 real = ["python-can>=3.3.4"]
 camera = ["pyrealsense2>=2.50", "Pillow>=10"]
 dev = ["pytest>=8", "pytest-cov>=5"]
@@ -25,6 +25,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 piper_control = ["assets/scenes/*.xml"]
+"piper_control.fr3" = ["assets/scenes/*.xml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

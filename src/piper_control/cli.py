@@ -10,14 +10,22 @@ import typer
 from .api.robot import PiperRobot
 from .api.types import Pose
 
-app = typer.Typer(help="Unified Piper real-robot and MuJoCo control CLI")
+app = typer.Typer(help="Piper (default) and Franka FR3 control and D435i RGB-D CLI")
 
 
-def _robot(backend: str, can_name: str):
-    return PiperRobot.connect(backend, {"can_name": can_name} if backend == "real" else {})
+def _robot_name(robot: str) -> str:
+    selected = "piper" if robot == "pepper" else robot
+    if selected not in ("piper", "franka_fr3"):
+        raise typer.BadParameter("choose piper or franka_fr3", param_hint="--robot")
+    return selected
 
 
-def _run_scene_host(duration: float, scene: Path | None = None) -> None:
+def _robot(backend: str, can_name: str, robot: str = "piper"):
+    return PiperRobot.connect(backend, {"can_name": can_name} if backend == "real" else {},
+                              robot=_robot_name(robot))
+
+
+def _run_scene_host(duration: float, scene: Path | None = None, robot: str = "piper") -> None:
     """Host the shared MuJoCo scene; on macOS re-exec through mjpython for the viewer."""
     if sys.platform == "darwin" and not os.environ.get("PIPER_MUJOCO_GUI_REEXEC"):
         mjpython = Path(sys.executable).with_name("mjpython")
@@ -28,12 +36,14 @@ def _run_scene_host(duration: float, scene: Path | None = None) -> None:
         source_root = str(Path(__file__).resolve().parents[1])
         environment["PYTHONPATH"] = source_root + os.pathsep + environment.get("PYTHONPATH", "")
         command = [str(mjpython), "-m", "piper_control.mujoco_gui", "--duration", str(duration)]
+        if robot != "piper":
+            command.extend(["--robot", robot])
         if scene is not None:
             command.extend(["--scene", str(scene)])
         subprocess.run(command, env=environment, check=True)
         return
     from .mujoco_gui import run_host
-    run_host(duration, scene=scene)
+    run_host(duration, scene=scene, robot=robot)
 
 
 def _pose_dict(pose: Pose) -> dict[str, list[float]]:
@@ -57,25 +67,25 @@ def doctor():
 
 
 @app.command()
-def state(backend: str = "mujoco", can_name: str = "can0"):
-    robot = _robot(backend, can_name)
+def state(backend: str = "mujoco", can_name: str = "can0", robot: str = "piper"):
+    instance = _robot(backend, can_name, robot)
     try:
-        typer.echo(robot.state())
+        typer.echo(instance.state())
     finally:
-        robot.disconnect()
+        instance.disconnect()
 
 
 @app.command()
-def pose(backend: str = "mujoco", can_name: str = "can0"):
+def pose(backend: str = "mujoco", can_name: str = "can0", robot: str = "piper"):
     """Print the current end-effector pose as JSON."""
-    robot = _robot(backend, can_name)
+    instance = _robot(backend, can_name, robot)
     try:
-        current = robot.state().pose
+        current = instance.state().pose
         if current is None:
             raise typer.BadParameter("backend did not return an end-effector pose")
         typer.echo(json.dumps(_pose_dict(current), indent=2))
     finally:
-        robot.disconnect()
+        instance.disconnect()
 
 
 @app.command("move-joints")
@@ -86,15 +96,24 @@ def move_joints(
     j4: float = typer.Option(..., "--j4", help="Joint 4 in radians"),
     j5: float = typer.Option(..., "--j5", help="Joint 5 in radians"),
     j6: float = typer.Option(..., "--j6", help="Joint 6 in radians"),
-    backend: str = "mujoco", can_name: str = "can0"):
-    robot = _robot(backend, can_name)
+    j7: float | None = typer.Option(None, "--j7", help="Joint 7, required only for franka_fr3"),
+    backend: str = "mujoco", can_name: str = "can0", robot: str = "piper"):
+    selected = _robot_name(robot)
+    if selected == "franka_fr3" and j7 is None:
+        raise typer.BadParameter("--j7 is required for franka_fr3", param_hint="--j7")
+    if selected == "piper" and j7 is not None:
+        raise typer.BadParameter("--j7 is only valid for franka_fr3", param_hint="--j7")
+    instance = _robot(backend, can_name, selected)
     try:
-        robot.move_joints([j1, j2, j3, j4, j5, j6])
+        joints = [j1, j2, j3, j4, j5, j6]
+        if j7 is not None:
+            joints.append(j7)
+        instance.move_joints(joints)
         if backend == "mujoco":
-            robot.wait_until_idle()
-        typer.echo(json.dumps({"joints_rad": robot.state().joints.positions.tolist()}, indent=2))
+            instance.wait_until_idle()
+        typer.echo(json.dumps({"joints_rad": instance.state().joints.positions.tolist()}, indent=2))
     finally:
-        robot.disconnect()
+        instance.disconnect()
 
 
 @app.command("move-p")
@@ -104,57 +123,62 @@ def move_p(
            z: float = typer.Option(..., "--z", help="Z position in metres"),
            qw: float | None = typer.Option(None, "--qw"), qx: float | None = typer.Option(None, "--qx"),
            qy: float | None = typer.Option(None, "--qy"), qz: float | None = typer.Option(None, "--qz"),
-           backend: str = "mujoco", can_name: str = "can0"):
-    robot = _robot(backend, can_name)
+           backend: str = "mujoco", can_name: str = "can0", robot: str = "piper"):
+    instance = _robot(backend, can_name, robot)
     try:
         quaternion = (qw, qx, qy, qz)
         if all(value is None for value in quaternion):
-            current = robot.state().pose
+            current = instance.state().pose
             if current is None:
                 raise typer.BadParameter("backend did not return a pose for orientation hold")
             quaternion = current.quaternion
         elif any(value is None for value in quaternion):
             raise typer.BadParameter("provide all four quaternion options or none")
-        robot.move_p(Pose((x, y, z), tuple(float(value) for value in quaternion)))
+        instance.move_p(Pose((x, y, z), tuple(float(value) for value in quaternion)))
         if backend == "mujoco":
-            robot.wait_until_idle()
-        current = robot.state().pose
+            instance.wait_until_idle()
+        current = instance.state().pose
         if current is not None:
             typer.echo(json.dumps(_pose_dict(current), indent=2))
     finally:
-        robot.disconnect()
+        instance.disconnect()
 
 
 @app.command()
-def gripper(width: float, effort: float | None = None, backend: str = "mujoco", can_name: str = "can0"):
-    robot = _robot(backend, can_name)
+def gripper(width: float, effort: float | None = None, backend: str = "mujoco", can_name: str = "can0", robot: str = "piper"):
+    instance = _robot(backend, can_name, robot)
     try:
-        robot.gripper(width, effort)
+        instance.gripper(width, effort)
         if backend == "mujoco":
-            robot.wait_until_idle()
-        typer.echo(json.dumps({"gripper_width_m": robot.state().joints.gripper}, indent=2))
+            instance.wait_until_idle()
+        typer.echo(json.dumps({"gripper_width_m": instance.state().joints.gripper}, indent=2))
     finally:
-        robot.disconnect()
+        instance.disconnect()
 
 
 @app.command()
-def stop(backend: str = "mujoco", can_name: str = "can0"):
-    robot = _robot(backend, can_name)
+def stop(backend: str = "mujoco", can_name: str = "can0", robot: str = "piper"):
+    instance = _robot(backend, can_name, robot)
     try:
-        robot.stop()
+        instance.stop()
     finally:
-        robot.disconnect()
+        instance.disconnect()
 
 
 @app.command()
 def run(backend: str = "mujoco", can_name: str = "can0", steps: int = 0,
         gui: bool = False, duration: float = 0.0,
-        scene: Annotated[Path | None, typer.Option("--scene", help="MuJoCo scene XML with an explicit piper_mount pose")] = None):
+        scene: Annotated[Path | None, typer.Option("--scene", help="MuJoCo scene XML with the selected robot's mount pose")] = None,
+        robot: str = "piper"):
     """Own the shared MuJoCo scene (--gui) or report its current state."""
+    selected = _robot_name(robot)
     if scene is not None:
         if backend != "mujoco":
             raise typer.BadParameter("--scene is only supported by the MuJoCo backend", param_hint="--scene")
-        from .backends.scene_builder import validate_scene
+        if selected == "franka_fr3":
+            from .fr3.scene_builder import validate_scene
+        else:
+            from .backends.scene_builder import validate_scene
         try:
             scene = validate_scene(scene)
         except ValueError as exc:
@@ -162,12 +186,18 @@ def run(backend: str = "mujoco", can_name: str = "can0", steps: int = 0,
     if gui:
         if backend != "mujoco":
             raise typer.BadParameter("--gui is only supported by the MuJoCo backend")
-        _run_scene_host(duration, scene=scene)
+        if selected == "piper":
+            _run_scene_host(duration, scene=scene)
+        else:
+            _run_scene_host(duration, scene=scene, robot=selected)
         return
     if backend == "mujoco" and (steps > 0 or scene is not None):
         # Standalone stepping keeps the documented --steps mode working
         # without requiring a running GUI process.
-        from .backends.mujoco import MujocoBackend
+        if selected == "franka_fr3":
+            from .fr3.mujoco import MujocoBackend
+        else:
+            from .backends.mujoco import MujocoBackend
         impl = MujocoBackend(realtime=True, scene=scene)
         impl.connect()
         try:
@@ -176,29 +206,32 @@ def run(backend: str = "mujoco", can_name: str = "can0", steps: int = 0,
         finally:
             impl.disconnect()
         return
-    robot = _robot(backend, can_name)
+    instance = _robot(backend, can_name, selected)
     try:
-        typer.echo(robot.state())
+        typer.echo(instance.state())
     finally:
-        robot.disconnect()
+        instance.disconnect()
 
 
 @app.command()
 def camera(backend: str = "mujoco", can_name: str = "can0",
-           rgb_out: Path = Path("wrist_rgb.png"), depth_out: Path = Path("wrist_depth.npy")):
+           rgb_out: Path = Path("wrist_rgb.png"), depth_out: Path = Path("wrist_depth.npy"),
+           robot: str = "piper"):
     """Capture one aligned 1280x720 wrist RGB-D frame."""
-    robot = None
+    selected = _robot_name(robot)
+    instance = None
     if backend == "real":
         from .sensors.realsense import RealSenseCamera
         cam = RealSenseCamera()
     elif backend == "mujoco":
-        robot = _robot("mujoco", can_name)
-        impl = robot._backend
+        instance = _robot("mujoco", can_name, selected)
+        impl = instance._backend
         if hasattr(impl, "read"):
             cam = impl  # shared-scene client renders from the running scene
         else:
             from .sensors.mujoco_rgbd import MujocoRGBDCamera
-            cam = MujocoRGBDCamera(impl.model, impl.data)
+            cam = MujocoRGBDCamera(impl.model, impl.data,
+                                  camera="d435i_check" if selected == "franka_fr3" else "d435i_color_optical_camera")
     else:
         raise typer.BadParameter(f"unknown backend: {backend}")
     cam.connect()
@@ -223,8 +256,8 @@ def camera(backend: str = "mujoco", can_name: str = "can0",
         }, indent=2))
     finally:
         cam.disconnect()
-        if robot is not None:
-            robot.disconnect()
+        if instance is not None:
+            instance.disconnect()
 
 
 if __name__ == "__main__":

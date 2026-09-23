@@ -45,3 +45,6 @@ the `link6` pose. Its gripper accepts 0–0.10 m total opening; the two physical
 fingers move by +/- half that width. The real backend retains its existing
 0–0.07 m command limit and SDK Cartesian control. The model migration does not
 change hardware limits or replace firmware IK on the real backend.
+# Robot selection
+
+The default `PiperRobot.connect("mujoco")` remains the six-joint Piper. Use `PiperRobot.connect("mujoco", robot="franka_fr3")` or `Robot.connect(...)` for the seven-joint FR3. All robot CLI commands accept `--robot franka_fr3`; only FR3 requires `--j7` for `move-joints`. `pepper` is accepted as a spelling alias for Piper. `FR3` real arm control is unavailable; camera capture with `--backend real` uses RealSense independently of the arm. See `docs/fr3.md`.

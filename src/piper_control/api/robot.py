@@ -14,30 +14,56 @@ class PiperRobot:
         self._backend = backend
 
     @classmethod
-    def connect(cls, backend: str = "mujoco", config: dict[str, Any] | None = None) -> "PiperRobot":
+    def connect(cls, backend: str = "mujoco", config: dict[str, Any] | None = None,
+                robot: str = "piper") -> "PiperRobot":
         config = dict(config or {})
+        robot = "piper" if robot == "pepper" else robot
+        if "robot" in config:
+            selected = "piper" if config["robot"] == "pepper" else config["robot"]
+            if robot != "piper" and robot != selected:
+                raise ValueError("conflicting robot selections")
+            config.pop("robot")
+            robot = selected
+        if robot not in ("piper", "franka_fr3"):
+            raise ValueError(f"unknown robot: {robot}; choose piper or franka_fr3")
+        if robot == "franka_fr3" and backend == "real":
+            raise BackendUnavailableError("FR3 real-robot control is not implemented; use --backend mujoco")
         requested_scene = None
         if config.get("scene") is not None:
             if backend != "mujoco":
                 raise ValueError("scene is only supported by the MuJoCo backend")
-            from ..backends.scene_builder import validate_scene
+            if robot == "franka_fr3":
+                from ..fr3.scene_builder import validate_scene
+            else:
+                from ..backends.scene_builder import validate_scene
             requested_scene = validate_scene(config["scene"])
             config["scene"] = requested_scene
         if backend == "mujoco":
             socket_path = config.pop("socket_path", None)
-            scene = SceneClient(socket_path=socket_path)
+            scene = SceneClient(socket_path=socket_path, robot=robot)
             try:
                 scene.connect()
             except BackendUnavailableError:
                 # No shared scene is running: fall back to a private in-process
                 # simulation so scripts and tests keep working standalone.
                 scene.disconnect()
-                impl = MujocoBackend(**config)
+                if robot == "franka_fr3":
+                    from ..fr3.mujoco import MujocoBackend as FR3MujocoBackend
+                    impl = FR3MujocoBackend(**config)
+                else:
+                    impl = MujocoBackend(**config)
                 impl.connect()
                 return cls(impl)
+            try:
+                info = scene.scene_info()
+                if info.get("robot", "piper") != robot:
+                    raise ValueError(f"Running MuJoCo robot is {info.get('robot', 'piper')}, requested {robot}; restart the GUI with --robot")
+            except Exception:
+                scene.disconnect()
+                raise
             if requested_scene is not None:
                 try:
-                    current_scene = scene.scene_info()["scene_path"]
+                    current_scene = info["scene_path"]
                     if current_scene != str(requested_scene):
                         raise ValueError(f"Running MuJoCo scene is {current_scene}, requested {requested_scene}; restart the GUI with --scene")
                 except Exception:

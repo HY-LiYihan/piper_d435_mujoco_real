@@ -1,0 +1,29 @@
+# Franka FR3 仿真
+
+FR3 + Franka Hand + CNC 腕部连接件 + D435i 模型来自用户提供的 `fr3_d435i_wrist_camera_mount_release(1)`。`vendor/fr3_d435i/` 保存了原始 MJCF、URDF、网格、预览图、README 和许可文件。模型许可请分别查看 `vendor/fr3_d435i/mujoco_fr3/LICENSE`、`vendor/fr3_d435i/licenses/`；仓库根目录 MIT 许可仅适用于本项目代码。模型快照不是 submodule，克隆后即可从源码加载。
+
+与单独 FR3 仓库一样，模型的无质量相机节点增加了 70 g **仿真**惯量，七个机械臂链节开启 MuJoCo 重力补偿，使位置执行器收敛。这不是官方硬件动力学标定值。机械臂七轴、双指夹爪、相机和支架均来自附件，七轴 IK 使用其 URDF，通过两组位姿对照验证 MJCF / URDF 的运动学一致性；IK 不避障。
+
+使用 `piper run --robot franka_fr3 --gui` 在默认棋盘场景启动；或用 `--scene scenes/fr3_tabletop.xml`。自定义 MJCF 主文件的 `worldbody` 必须直接包含一个空的固定安装节点：
+
+```xml
+<body name="fr3_mount" pos="0 0 0" quat="1 0 0 0"/>
+```
+
+`pos` 必填，单位米；`quat` 是可选的 wxyz 四元数。FR3 的 `move-p` 位姿对应 `fr3_link7`，仿真相机使用模型中的 `d435i_check`。仿真深度是 MuJoCo 渲染深度，不等同于 D435i 物理测量。若有 USB RealSense，`piper camera --backend real` 仅采集相机，不控制机械臂。FR3 **真机运动控制未实现**。
+
+Python 示例：
+
+```python
+from piper_control import Robot
+
+arm = Robot.connect("mujoco", robot="franka_fr3")
+try:
+    print(arm.state())
+    arm.move_joints([0, 0, 0, -1.57, 0, 1.57, -0.785])
+    arm.wait_until_idle()
+    arm.gripper(0.04)
+    arm.wait_until_idle()
+finally:
+    arm.disconnect()
+```

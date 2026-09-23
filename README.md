@@ -1,6 +1,6 @@
-# Piper Control
+# Piper + FR3 Control
 
-统一的 Piper 机械臂 Python API、MuJoCo 仿真、Piper 真机和 D435i RGB-D 接口。
+统一的 Piper / Franka FR3 Python API、MuJoCo 仿真、Piper 真机和 D435i RGB-D 接口。现有命令保持兼容：不传 `--robot` 时选择 Piper；`--robot franka_fr3` 使用七轴 FR3。`pepper` 也作为 Piper 的别名接受。
 
 ## 上游版本
 
@@ -9,8 +9,9 @@
 | Piper SDK | https://github.com/agilexrobotics/piper_sdk | `0.6.2`, `c9e8a28174e71eeaac448593cb65f8ab258a92fe` |
 | Piper 官方 URDF / 夹爪 / meshes | https://github.com/agilexrobotics/agx_arm_urdf | `f6642ce0d7872c686f29c99e9e10cd23d1d49313` |
 | D435 外壳和支架资源 | https://github.com/agilexrobotics/piper_isaac_sim | `8e1f88fdb7afca49c40e9a0c1c01cc588e86f0d2` |
+| FR3 + D435i 腕部支架模型 | 用户提供的 `fr3_d435i_wrist_camera_mount_release(1)` | 收录于 `vendor/fr3_d435i/` |
 
-两个模型仓库作为 submodule 保留。机械臂与夹爪使用 `agx_arm_urdf/piper`；旧 Isaac 仓库仅提供 D435 外壳和打印支架，不要求 Isaac Sim 或 ROS。
+Piper 模型仓库作为 submodule 保留。机械臂与夹爪使用 `agx_arm_urdf/piper`；旧 Isaac 仓库仅提供 D435 外壳和打印支架，不要求 Isaac Sim 或 ROS。FR3 模型为随仓库提交的快照，无需额外 submodule；来源、许可和仿真修改见 `docs/fr3.md`。
 
 ## 安装
 
@@ -19,6 +20,23 @@ git submodule update --init --recursive
 python -m pip install -e ".[mujoco,dev]"
 pip install -e ".[real,camera]"  # 需要真机/RealSense 时
 ```
+
+FR3 的 `vendor` 模型目录按源码路径读取，使用上述**可编辑安装**。`[real]` 仅用于 Piper 真机；FR3 真机运动控制未实现，也未进行硬件测试。真相机取帧可独立使用 `piper camera --backend real`。
+
+## 机器人选择
+
+所有涉及机器人仿真的 `piper` 子命令接受 `--robot piper`（默认）或 `--robot franka_fr3`；Python API 使用 `PiperRobot.connect("mujoco", robot="franka_fr3")`，也可使用别名 `Robot.connect(...)`。FR3 与 Piper 的 GUI 使用**不同的本机 socket**，可同时运行；客户端只会连接同类型机器人，即使显式指定了其他机器人的 socket 也会拒绝。FR3 场景必须有 `fr3_mount`，Piper 场景仍使用 `piper_mount`。
+
+```bash
+piper run --robot franka_fr3 --backend mujoco --gui
+piper run --robot franka_fr3 --scene scenes/fr3_tabletop.xml --steps 100
+piper move-joints --robot franka_fr3 --j1 0 --j2 0 --j3 0 --j4 -1.57 --j5 0 --j6 1.57 --j7 -0.785
+piper pose --robot franka_fr3
+piper gripper 0.04 --robot franka_fr3
+piper camera --robot franka_fr3 --backend mujoco
+```
+
+FR3 `move-joints` 必须传 `--j7`，Piper 则不可传；其余 `move-p`、`state`、`stop` 操作与 Piper 相同。FR3 仿真末端为 `fr3_link7`，位置采用场景世界坐标；腕部 D435i 以 `d435i_check` 渲染。FR3 真机控制 (`--backend real --robot franka_fr3`) 会明确报错，不会发出运动指令。详细说明见 `docs/fr3.md`。
 
 ## 使用
 

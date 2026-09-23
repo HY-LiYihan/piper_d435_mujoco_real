@@ -76,3 +76,6 @@ Both camera providers return `RGBDFrame`: RGB is `uint8 HxWx3`, depth is `float3
 The public unit conventions are metres, radians and `(w, x, y, z)` quaternions. ROS 2 is intentionally not a first-stage dependency.
 
 The upstream Isaac asset repository contains DAE paths that differ only by letter case. On case-insensitive macOS filesystems that submodule can appear dirty immediately after checkout, so `.gitmodules` ignores submodule worktree dirt while the pinned gitlink SHA remains authoritative.
+# FR3 selection
+
+`PiperRobot.connect` and the CLI select the MuJoCo implementation with a `robot` argument (default `piper`). `fr3/mujoco.py` uses the supplied FR3 MJCF and `fr3/ik.py` the supplied URDF; the existing Piper adapters remain unchanged. `JointState` accepts six or seven positions with matching velocity lengths. The shared scene protocol advertises `robot` and rejects cross-robot connections; each type has its own default socket. The server selects `d435i_check` when rendering FR3 RGB-D. There is no FR3 real-arm backend.

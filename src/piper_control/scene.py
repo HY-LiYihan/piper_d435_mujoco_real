@@ -22,7 +22,10 @@ from .errors import BackendUnavailableError, IKError, NotConnectedError
 from .sensors.frame import CameraIntrinsics, RGBDFrame
 
 
-def default_socket_path() -> Path:
+def default_socket_path(robot: str = "piper") -> Path:
+    if robot == "franka_fr3":
+        override = __import__("os").environ.get("FR3_SCENE_SOCKET")
+        return Path(override) if override else Path(tempfile.gettempdir()) / "fr3_scene.sock"
     override = __import__("os").environ.get("PIPER_SCENE_SOCKET")
     return Path(override) if override else Path(tempfile.gettempdir()) / "piper_scene.sock"
 
@@ -65,9 +68,10 @@ def _state_from_dict(data: dict) -> RobotState:
 class SceneServer:
     """Host the shared MuJoCo scene and serve CLI requests over a socket."""
 
-    def __init__(self, backend, socket_path=None):
+    def __init__(self, backend, socket_path=None, robot: str = "piper"):
         self.backend = backend
-        self.socket_path = Path(socket_path) if socket_path else default_socket_path()
+        self.robot = robot
+        self.socket_path = Path(socket_path) if socket_path else default_socket_path(robot)
         self.lock = threading.Lock()
         self._server = None
         self._thread = None
@@ -133,7 +137,8 @@ class SceneServer:
         command = payload.get("cmd")
         if command == "scene_info":
             path = self.backend.scene_path
-            self._respond(conn, {"ok": True, "scene_path": str(path) if path is not None else None})
+            self._respond(conn, {"ok": True, "robot": self.robot,
+                                 "scene_path": str(path) if path is not None else None})
         elif command == "state":
             with self.lock:
                 state = self.backend.state()
@@ -164,7 +169,9 @@ class SceneServer:
             if self._camera is not None:
                 self._camera.disconnect()
             from .sensors.mujoco_rgbd import MujocoRGBDCamera
+            camera_name = "d435i_check" if self.robot == "franka_fr3" else "d435i_color_optical_camera"
             self._camera = MujocoRGBDCamera(self.backend.model, self.backend.data,
+                                            camera=camera_name,
                                             width=width, height=height)
             self._camera.connect()
             self._camera_size = (width, height)
@@ -207,8 +214,8 @@ class SceneServer:
 class SceneClient:
     """A :class:`RobotBackend` that forwards every call to the shared scene."""
 
-    def __init__(self, socket_path=None):
-        self.socket_path = Path(socket_path) if socket_path else default_socket_path()
+    def __init__(self, socket_path=None, robot: str = "piper"):
+        self.socket_path = Path(socket_path) if socket_path else default_socket_path(robot)
         self._socket = None
         self._reader = None
 

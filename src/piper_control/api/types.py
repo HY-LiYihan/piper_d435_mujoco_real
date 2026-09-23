@@ -24,17 +24,18 @@ class Pose:
 @dataclass
 class JointState:
     positions: np.ndarray
-    velocities: np.ndarray = field(default_factory=lambda: np.zeros(6, dtype=float))
+    velocities: np.ndarray | None = None
     gripper: float = 0.0
     timestamp: float = field(default_factory=time.time)
 
     def __post_init__(self) -> None:
         self.positions = np.asarray(self.positions, dtype=float).reshape(-1)
-        self.velocities = np.asarray(self.velocities, dtype=float).reshape(-1)
-        if self.positions.size != 6:
-            raise ValueError("Piper requires six arm joint positions")
-        if self.velocities.size != 6:
-            raise ValueError("Piper requires six arm joint velocities")
+        if self.positions.size not in (6, 7):
+            raise ValueError("arm state requires six Piper or seven FR3 joint positions")
+        self.velocities = (np.zeros_like(self.positions) if self.velocities is None
+                           else np.asarray(self.velocities, dtype=float).reshape(-1))
+        if self.velocities.size != self.positions.size:
+            raise ValueError("arm joint velocities must match the position count")
 
 
 @dataclass
