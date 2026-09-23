@@ -9,6 +9,8 @@ from typing import Annotated
 import typer
 from .api.robot import PiperRobot
 from .api.types import Pose
+from .errors import BackendUnavailableError
+from .scene import SceneClient
 
 app = typer.Typer(help="Piper (default) and Franka FR3 control and D435i RGB-D CLI")
 
@@ -23,6 +25,60 @@ def _robot_name(robot: str) -> str:
 def _robot(backend: str, can_name: str, robot: str = "piper"):
     return PiperRobot.connect(backend, {"can_name": can_name} if backend == "real" else {},
                               robot=_robot_name(robot))
+
+
+def _active_robot() -> str | None:
+    active = []
+    for name in ("piper", "franka_fr3"):
+        client = SceneClient(robot=name)
+        try:
+            client.connect()
+        except BackendUnavailableError:
+            continue
+        try:
+            info = client.scene_info()
+            if info.get("robot", "piper") != name:
+                raise RuntimeError(f"Scene socket for {name} belongs to {info.get('robot')}")
+            active.append(name)
+        finally:
+            client.disconnect()
+    if len(active) > 1:
+        raise typer.BadParameter("Both Piper and FR3 scenes are running; specify --robot", param_hint="--robot")
+    return active[0] if active else None
+
+
+def _selection(ctx: typer.Context, backend: str | None = None, robot: str | None = None,
+               *, launch: bool = False, camera: bool = False) -> tuple[str, str]:
+    global_backend = ctx.obj.get("backend")
+    global_robot = ctx.obj.get("robot")
+    if backend is not None and global_backend is not None and backend != global_backend:
+        raise typer.BadParameter("conflicting --backend options", param_hint="--backend")
+    if robot is not None and global_robot is not None and _robot_name(robot) != _robot_name(global_robot):
+        raise typer.BadParameter("conflicting --robot options", param_hint="--robot")
+    selected_backend = backend or global_backend or "mujoco"
+    if selected_backend not in ("mujoco", "real"):
+        raise typer.BadParameter("choose mujoco or real", param_hint="--backend")
+    explicit_robot = robot or global_robot
+    if selected_backend == "real" and not camera and explicit_robot is None:
+        raise typer.BadParameter("real-robot control requires --robot piper", param_hint="--robot")
+    selected_robot = (_robot_name(explicit_robot) if explicit_robot is not None else
+                      "piper" if launch or selected_backend == "real" else _active_robot() or "piper")
+    if selected_backend == "real" and selected_robot == "franka_fr3" and not camera:
+        raise typer.BadParameter("FR3 real-robot control is not implemented", param_hint="--robot")
+    return selected_backend, selected_robot
+
+
+def _scene_for(robot: str, path: Path | None) -> Path | None:
+    if path is None:
+        return None
+    if robot == "franka_fr3":
+        from .fr3.scene_builder import validate_scene
+    else:
+        from .backends.scene_builder import validate_scene
+    try:
+        return validate_scene(path)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--scene") from exc
 
 
 def _run_scene_host(duration: float, scene: Path | None = None, robot: str = "piper") -> None:
@@ -46,6 +102,39 @@ def _run_scene_host(duration: float, scene: Path | None = None, robot: str = "pi
     run_host(duration, scene=scene, robot=robot)
 
 
+@app.callback(invoke_without_command=True)
+def main(ctx: typer.Context, backend: str | None = typer.Option(None, "--backend"),
+         robot: str | None = typer.Option(None, "--robot"),
+         scene: Path | None = typer.Option(None, "--scene"),
+         no_gui: bool = typer.Option(False, "--no-gui")):
+    """Start a MuJoCo scene with GUI by default; control commands reuse it."""
+    ctx.obj = {"backend": backend, "robot": robot, "scene": scene, "no_gui": no_gui}
+    if ctx.invoked_subcommand is not None:
+        if scene is not None and ctx.invoked_subcommand != "run":
+            raise typer.BadParameter("--scene is only valid when starting a scene", param_hint="--scene")
+        if no_gui:
+            raise typer.BadParameter("--no-gui is only valid when starting a scene", param_hint="--no-gui")
+        return
+    selected_backend, selected_robot = _selection(ctx, launch=True)
+    if selected_backend == "real":
+        if scene is not None or no_gui:
+            raise typer.BadParameter("--scene and --no-gui require the MuJoCo backend")
+        instance = _robot(selected_backend, "can0", selected_robot)
+        try:
+            typer.echo(instance.state())
+        finally:
+            instance.disconnect()
+        return
+    validated = _scene_for(selected_robot, scene)
+    if no_gui:
+        from .mujoco_gui import run_host
+        run_host(scene=validated, robot=selected_robot, gui=False)
+    elif selected_robot == "piper":
+        _run_scene_host(0.0, scene=validated)
+    else:
+        _run_scene_host(0.0, scene=validated, robot=selected_robot)
+
+
 def _pose_dict(pose: Pose) -> dict[str, list[float]]:
     return {
         "position_m": [float(value) for value in pose.position],
@@ -67,7 +156,8 @@ def doctor():
 
 
 @app.command()
-def state(backend: str = "mujoco", can_name: str = "can0", robot: str = "piper"):
+def state(ctx: typer.Context, backend: str | None = None, can_name: str = "can0", robot: str | None = None):
+    backend, robot = _selection(ctx, backend, robot)
     instance = _robot(backend, can_name, robot)
     try:
         typer.echo(instance.state())
@@ -76,8 +166,9 @@ def state(backend: str = "mujoco", can_name: str = "can0", robot: str = "piper")
 
 
 @app.command()
-def pose(backend: str = "mujoco", can_name: str = "can0", robot: str = "piper"):
+def pose(ctx: typer.Context, backend: str | None = None, can_name: str = "can0", robot: str | None = None):
     """Print the current end-effector pose as JSON."""
+    backend, robot = _selection(ctx, backend, robot)
     instance = _robot(backend, can_name, robot)
     try:
         current = instance.state().pose
@@ -90,6 +181,7 @@ def pose(backend: str = "mujoco", can_name: str = "can0", robot: str = "piper"):
 
 @app.command("move-joints")
 def move_joints(
+    ctx: typer.Context,
     j1: float = typer.Option(..., "--j1", help="Joint 1 in radians"),
     j2: float = typer.Option(..., "--j2", help="Joint 2 in radians"),
     j3: float = typer.Option(..., "--j3", help="Joint 3 in radians"),
@@ -97,8 +189,8 @@ def move_joints(
     j5: float = typer.Option(..., "--j5", help="Joint 5 in radians"),
     j6: float = typer.Option(..., "--j6", help="Joint 6 in radians"),
     j7: float | None = typer.Option(None, "--j7", help="Joint 7, required only for franka_fr3"),
-    backend: str = "mujoco", can_name: str = "can0", robot: str = "piper"):
-    selected = _robot_name(robot)
+    backend: str | None = None, can_name: str = "can0", robot: str | None = None):
+    backend, selected = _selection(ctx, backend, robot)
     if selected == "franka_fr3" and j7 is None:
         raise typer.BadParameter("--j7 is required for franka_fr3", param_hint="--j7")
     if selected == "piper" and j7 is not None:
@@ -118,12 +210,14 @@ def move_joints(
 
 @app.command("move-p")
 def move_p(
+           ctx: typer.Context,
            x: float = typer.Option(..., "--x", help="X position in metres"),
            y: float = typer.Option(..., "--y", help="Y position in metres"),
            z: float = typer.Option(..., "--z", help="Z position in metres"),
            qw: float | None = typer.Option(None, "--qw"), qx: float | None = typer.Option(None, "--qx"),
            qy: float | None = typer.Option(None, "--qy"), qz: float | None = typer.Option(None, "--qz"),
-           backend: str = "mujoco", can_name: str = "can0", robot: str = "piper"):
+           backend: str | None = None, can_name: str = "can0", robot: str | None = None):
+    backend, robot = _selection(ctx, backend, robot)
     instance = _robot(backend, can_name, robot)
     try:
         quaternion = (qw, qx, qy, qz)
@@ -145,7 +239,9 @@ def move_p(
 
 
 @app.command()
-def gripper(width: float, effort: float | None = None, backend: str = "mujoco", can_name: str = "can0", robot: str = "piper"):
+def gripper(ctx: typer.Context, width: float, effort: float | None = None, backend: str | None = None,
+            can_name: str = "can0", robot: str | None = None):
+    backend, robot = _selection(ctx, backend, robot)
     instance = _robot(backend, can_name, robot)
     try:
         instance.gripper(width, effort)
@@ -157,7 +253,8 @@ def gripper(width: float, effort: float | None = None, backend: str = "mujoco", 
 
 
 @app.command()
-def stop(backend: str = "mujoco", can_name: str = "can0", robot: str = "piper"):
+def stop(ctx: typer.Context, backend: str | None = None, can_name: str = "can0", robot: str | None = None):
+    backend, robot = _selection(ctx, backend, robot)
     instance = _robot(backend, can_name, robot)
     try:
         instance.stop()
@@ -166,23 +263,17 @@ def stop(backend: str = "mujoco", can_name: str = "can0", robot: str = "piper"):
 
 
 @app.command()
-def run(backend: str = "mujoco", can_name: str = "can0", steps: int = 0,
+def run(ctx: typer.Context, backend: str | None = None, can_name: str = "can0", steps: int = 0,
         gui: bool = False, duration: float = 0.0,
         scene: Annotated[Path | None, typer.Option("--scene", help="MuJoCo scene XML with the selected robot's mount pose")] = None,
-        robot: str = "piper"):
+        robot: str | None = None):
     """Own the shared MuJoCo scene (--gui) or report its current state."""
-    selected = _robot_name(robot)
+    scene = scene or ctx.obj["scene"]
+    if scene is not None and (backend or ctx.obj["backend"] or "mujoco") != "mujoco":
+        raise typer.BadParameter("--scene is only supported by the MuJoCo backend", param_hint="--scene")
+    backend, selected = _selection(ctx, backend, robot, launch=gui or steps > 0 or scene is not None)
     if scene is not None:
-        if backend != "mujoco":
-            raise typer.BadParameter("--scene is only supported by the MuJoCo backend", param_hint="--scene")
-        if selected == "franka_fr3":
-            from .fr3.scene_builder import validate_scene
-        else:
-            from .backends.scene_builder import validate_scene
-        try:
-            scene = validate_scene(scene)
-        except ValueError as exc:
-            raise typer.BadParameter(str(exc), param_hint="--scene") from exc
+        scene = _scene_for(selected, scene)
     if gui:
         if backend != "mujoco":
             raise typer.BadParameter("--gui is only supported by the MuJoCo backend")
@@ -214,11 +305,11 @@ def run(backend: str = "mujoco", can_name: str = "can0", steps: int = 0,
 
 
 @app.command()
-def camera(backend: str = "mujoco", can_name: str = "can0",
+def camera(ctx: typer.Context, backend: str | None = None, can_name: str = "can0",
            rgb_out: Path = Path("wrist_rgb.png"), depth_out: Path = Path("wrist_depth.npy"),
-           robot: str = "piper"):
+           robot: str | None = None):
     """Capture one aligned 1280x720 wrist RGB-D frame."""
-    selected = _robot_name(robot)
+    backend, selected = _selection(ctx, backend, robot, camera=True)
     instance = None
     if backend == "real":
         from .sensors.realsense import RealSenseCamera

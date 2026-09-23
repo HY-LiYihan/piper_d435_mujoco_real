@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Shared MuJoCo scene over a Unix domain socket.
 
-One process (``piper run --gui``) owns the simulation and runs a
+One process (``robot_control --backend mujoco``) owns the simulation and runs a
 :class:`SceneServer`.  Every other CLI invocation acts as a
 :class:`SceneClient`, so all commands mutate the same ``MjModel``/``MjData``
 instance and the viewer reflects the result.
@@ -75,12 +75,21 @@ class SceneServer:
         self.lock = threading.Lock()
         self._server = None
         self._thread = None
+        self._owns_socket = False
         self._camera = None
         self._camera_size = None
 
     def start(self) -> None:
         if self._server is not None:
             return
+        existing = SceneClient(socket_path=self.socket_path, robot=self.robot)
+        try:
+            existing.connect()
+        except BackendUnavailableError:
+            pass
+        else:
+            existing.disconnect()
+            raise BackendUnavailableError(f"MuJoCo scene is already running at {self.socket_path}")
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
         self.socket_path.unlink(missing_ok=True)
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -91,6 +100,7 @@ class SceneServer:
             raise BackendUnavailableError(
                 f"cannot bind scene socket {self.socket_path}: {exc}"
             ) from exc
+        self._owns_socket = True
         server.listen(16)
         self._server = server
         self._thread = threading.Thread(
@@ -106,7 +116,9 @@ class SceneServer:
         if self._camera is not None:
             self._camera.disconnect()
             self._camera = None
-        self.socket_path.unlink(missing_ok=True)
+        if self._owns_socket:
+            self.socket_path.unlink(missing_ok=True)
+            self._owns_socket = False
 
     def _accept_loop(self) -> None:
         while self._server is not None:
@@ -215,6 +227,7 @@ class SceneClient:
     """A :class:`RobotBackend` that forwards every call to the shared scene."""
 
     def __init__(self, socket_path=None, robot: str = "piper"):
+        self.robot = robot
         self.socket_path = Path(socket_path) if socket_path else default_socket_path(robot)
         self._socket = None
         self._reader = None
@@ -229,8 +242,8 @@ class SceneClient:
         except OSError as exc:
             sock.close()
             raise BackendUnavailableError(
-                f"Piper scene server is not running at {self.socket_path}; "
-                "start it first with `piper run --backend mujoco --gui`"
+                f"{self.robot} scene server is not running at {self.socket_path}; "
+                f"start it first with `robot_control --backend mujoco --robot {self.robot}`"
             ) from exc
         self._socket = sock
         self._reader = sock.makefile("rb")

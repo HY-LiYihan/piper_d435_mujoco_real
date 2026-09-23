@@ -1,6 +1,6 @@
 # Piper + FR3 Control
 
-统一的 Piper / Franka FR3 Python API、MuJoCo 仿真、Piper 真机和 D435i RGB-D 接口。现有命令保持兼容：不传 `--robot` 时选择 Piper；`--robot franka_fr3` 使用七轴 FR3。`pepper` 也作为 Piper 的别名接受。
+统一的 Piper / Franka FR3 Python API、MuJoCo 仿真、Piper 真机和 D435i RGB-D 接口。主命令为 `robot_control`；旧命令 `piper` 保留兼容。启动时不传 `--robot` 默认 Piper；`--robot franka_fr3` 启动七轴 FR3。`pepper` 也作为 Piper 的别名接受。
 
 ## 上游版本
 
@@ -21,22 +21,46 @@ python -m pip install -e ".[mujoco,dev]"
 pip install -e ".[real,camera]"  # 需要真机/RealSense 时
 ```
 
-FR3 的 `vendor` 模型目录按源码路径读取，使用上述**可编辑安装**。`[real]` 仅用于 Piper 真机；FR3 真机运动控制未实现，也未进行硬件测试。真相机取帧可独立使用 `piper camera --backend real`。
+FR3 的 `vendor` 模型目录按源码路径读取，使用上述**可编辑安装**。`[real]` 仅用于 Piper 真机；FR3 真机运动控制未实现，也未进行硬件测试。真相机取帧可独立使用 `robot_control --backend real camera`。
 
-## 机器人选择
+## 统一命令与自动选择
 
-所有涉及机器人仿真的 `piper` 子命令接受 `--robot piper`（默认）或 `--robot franka_fr3`；Python API 使用 `PiperRobot.connect("mujoco", robot="franka_fr3")`，也可使用别名 `Robot.connect(...)`。FR3 与 Piper 的 GUI 使用**不同的本机 socket**，可同时运行；客户端只会连接同类型机器人，即使显式指定了其他机器人的 socket 也会拒绝。FR3 场景必须有 `fr3_mount`，Piper 场景仍使用 `piper_mount`。
-
-```bash
-piper run --robot franka_fr3 --backend mujoco --gui
-piper run --robot franka_fr3 --scene scenes/fr3_tabletop.xml --steps 100
-piper move-joints --robot franka_fr3 --j1 0 --j2 0 --j3 0 --j4 -1.57 --j5 0 --j6 1.57 --j7 -0.785
-piper pose --robot franka_fr3
-piper gripper 0.04 --robot franka_fr3
-piper camera --robot franka_fr3 --backend mujoco
+```text
+robot_control [--backend mujoco|real] [--robot piper|franka_fr3] [--scene 场景.xml] [--no-gui] [子命令] [子命令参数]
 ```
 
-FR3 `move-joints` 必须传 `--j7`，Piper 则不可传；其余 `move-p`、`state`、`stop` 操作与 Piper 相同。FR3 仿真末端为 `fr3_link7`，位置采用场景世界坐标；腕部 D435i 以 `d435i_check` 渲染。FR3 真机控制 (`--backend real --robot franka_fr3`) 会明确报错，不会发出运动指令。详细说明见 `docs/fr3.md`。
+**启动场景**：在第一个终端执行下列命令并保持其运行。只选 `mujoco`（也是默认后端）时自动打开 GUI；`--no-gui` 则启动无窗口、持续推进物理仿真的共享场景，按 Ctrl+C 退出。无 `--robot` 时启动 Piper。
+
+```bash
+robot_control --backend mujoco
+robot_control --backend mujoco --robot franka_fr3
+robot_control --backend mujoco --robot franka_fr3 --scene scenes/fr3_tabletop.xml
+robot_control --backend mujoco --robot franka_fr3 --no-gui
+```
+
+**控制场景**：在第二个终端执行，子命令不会再开 GUI。假设第一个终端已启动 FR3，下面省略 `--robot` 的命令会自动控制 **FR3**：
+
+```bash
+robot_control state
+robot_control pose
+robot_control move-joints --j1 0 --j2 0 --j3 0 --j4 -1.57 --j5 0 --j6 1.57 --j7 -0.785
+robot_control move-p --x 0.55 --y 0 --z 0.73
+robot_control gripper 0.04
+robot_control camera --rgb-out wrist_rgb.png --depth-out wrist_depth.npy
+robot_control stop
+```
+
+控制命令的 `--robot` 选择顺序为：显式指定 > 当前唯一运行的 MuJoCo 场景 > 无场景时默认 Piper（独立仿真）。Piper 和 FR3 场景同时运行时，必须显式指定 `--robot`，例如 `robot_control --robot franka_fr3 state`。两种机器人的 GUI 使用不同 socket，客户端不会误连另一种机器人。FR3 `move-joints` 必须传 `--j7`，Piper 不可传。
+
+**真机**不使用 MuJoCo GUI。为了避免误操作，真机运动或状态命令必须显式写 `--backend real --robot piper`：
+
+```bash
+robot_control --backend real --robot piper state
+robot_control --backend real --robot piper gripper 0.02
+robot_control --backend real camera   # 仅采集本机 D435i，无需连接机械臂
+```
+
+FR3 真机运动控制 (`--backend real --robot franka_fr3`) 会明确报错。Python API 使用 `PiperRobot.connect("mujoco", robot="franka_fr3")` 或 `Robot.connect(...)`。FR3 场景必须包含 `fr3_mount`，Piper 场景仍使用 `piper_mount`，参见 `docs/fr3.md`。
 
 ## 使用
 
@@ -56,23 +80,25 @@ robot.stop()
 robot.disconnect()
 ```
 
-## 常用仿真命令
+## Piper 场景与坐标细节
 
 打开 MuJoCo GUI（窗口关闭前持续运行）：
 
 ```bash
-piper run --backend mujoco --gui
+robot_control --backend mujoco
 ```
 
 不传 `--scene` 时使用 MuJoCo 示例常见的蓝色渐变天空和棋盘地面。指定其他场景：
 
 ```bash
-piper run --backend mujoco --gui --scene scenes/tabletop.xml
-# 无窗口运行，也支持 --scene：
-piper run --backend mujoco --steps 100 --scene scenes/tabletop.xml
+robot_control --backend mujoco --scene scenes/tabletop.xml
+# 无窗口、持续运行的共享场景：
+robot_control --backend mujoco --scene scenes/tabletop.xml --no-gui
+# 原有仅执行固定步数的命令仍可使用：
+robot_control --backend mujoco run --steps 100 --scene scenes/tabletop.xml
 ```
 
-`--scene` 仅用于 `piper run` 的 MuJoCo 后端，真机后端会拒绝该参数。场景采用原生 MJCF XML；加载机器人和资源前，会检查主 XML 的 `<worldbody>` 下是否有且只有一个空的固定挂载节点：
+`--scene` 仅用于启动 MuJoCo 场景，真机后端会拒绝该参数。场景采用原生 MJCF XML；加载机器人和资源前，会检查主 XML 的 `<worldbody>` 下是否有且只有一个空的固定挂载节点：
 
 ```xml
 <body name="piper_mount" pos="-0.3 0 0.75" quat="1 0 0 0"/>
@@ -85,39 +111,39 @@ MuJoCo 的 `pose` 输出和 `move-p` 输入统一使用**场景世界坐标**；
 读取当前末端位姿（位置 m，四元数顺序 wxyz；MuJoCo 下为世界坐标）：
 
 ```bash
-piper pose --backend mujoco
+robot_control pose
 ```
 
 移动到指定位置；不提供四元数时保持当前姿态：
 
 ```bash
-piper move-p --backend mujoco --x 0.0561352 --y 0.0 --z 0.2131783
+robot_control move-p --x 0.0561352 --y 0.0 --z 0.2131783
 ```
 
 指定完整四元数：
 
 ```bash
-piper move-p --backend mujoco --x 0.0561352 --y 0.0 --z 0.2131783 \
+robot_control move-p --x 0.0561352 --y 0.0 --z 0.2131783 \
   --qw -0.73727734 --qx 0.0 --qy -0.67559020 --qz 0.0
 ```
 
 控制夹爪，单位为米：
 
 ```bash
-piper gripper 0.02 --backend mujoco
+robot_control gripper 0.02
 ```
 
 获取腕部 D435 RGB-D。RGB 为 PNG，depth 为米制 `float32` NumPy 文件，分辨率固定 1280x720：
 
 ```bash
-piper camera --backend mujoco \
+robot_control camera \
   --rgb-out wrist_rgb.png --depth-out wrist_depth.npy
 ```
 
 关节命令使用弧度，并采用选项形式以支持负数：
 
 ```bash
-piper move-joints --backend mujoco \
+robot_control move-joints \
   --j1 0.1 --j2 0.2 --j3 -0.2 --j4 0 --j5 0 --j6 0
 ```
 

@@ -42,7 +42,7 @@ def test_cli_fr3_joint_validation_before_connection():
     missing = runner.invoke(app, common + ["--robot", "franka_fr3"])
     assert missing.exit_code == 2
     assert "--j7 is required" in missing.output
-    extra = runner.invoke(app, common + ["--j7", "0"])
+    extra = runner.invoke(app, common + ["--robot", "piper", "--j7", "0"])
     assert extra.exit_code == 2
     assert "--j7 is only valid" in extra.output
 
