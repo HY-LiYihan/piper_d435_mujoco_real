@@ -68,7 +68,10 @@ def compile_scene(robot: ET.ElementTree, path: Path):
     environment.option.timestep = component.option.timestep
     environment.option.integrator = component.option.integrator
     environment.compiler.fusestatic = False
-    environment.compiler.inertiafromgeom = component.compiler.inertiafromgeom
+    # Every dynamic Piper body has an explicit inertial. Avoid carrying the
+    # component's geometry-inertia setting into newer MuJoCo versions, where
+    # zero-volume visual meshes can fail compilation.
+    component.compiler.inertiafromgeom = 0
     environment.compiler.autolimits = True
     mount.add_frame().attach_body(robot_body, prefix="", suffix="")
     return environment.compile()

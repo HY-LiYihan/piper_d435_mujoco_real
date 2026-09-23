@@ -47,6 +47,7 @@ def compile_scene(model_path: Path, scene_path: Path):
     environment.option.integrator = robot.option.integrator
     environment.compiler.fusestatic = False
     environment.compiler.autolimits = True
+    robot.compiler.inertiafromgeom = 0
     mount = _find_body(environment, MOUNT_NAME)
     robot_body = _find_body(robot, "fr3_link0")
     if mount is None:
