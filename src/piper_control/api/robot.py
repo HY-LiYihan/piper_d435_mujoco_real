@@ -16,6 +16,13 @@ class PiperRobot:
     @classmethod
     def connect(cls, backend: str = "mujoco", config: dict[str, Any] | None = None) -> "PiperRobot":
         config = dict(config or {})
+        requested_scene = None
+        if config.get("scene") is not None:
+            if backend != "mujoco":
+                raise ValueError("scene is only supported by the MuJoCo backend")
+            from ..backends.scene_builder import validate_scene
+            requested_scene = validate_scene(config["scene"])
+            config["scene"] = requested_scene
         if backend == "mujoco":
             socket_path = config.pop("socket_path", None)
             scene = SceneClient(socket_path=socket_path)
@@ -28,6 +35,14 @@ class PiperRobot:
                 impl = MujocoBackend(**config)
                 impl.connect()
                 return cls(impl)
+            if requested_scene is not None:
+                try:
+                    current_scene = scene.scene_info()["scene_path"]
+                    if current_scene != str(requested_scene):
+                        raise ValueError(f"Running MuJoCo scene is {current_scene}, requested {requested_scene}; restart the GUI with --scene")
+                except Exception:
+                    scene.disconnect()
+                    raise
             return cls(scene)
         elif backend == "real":
             impl = RealBackend(**config)

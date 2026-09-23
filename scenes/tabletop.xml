@@ -1,0 +1,20 @@
+<mujoco model="piper_tabletop">
+  <visual>
+    <headlight diffuse="0.8 0.8 0.8" ambient="0.3 0.3 0.3"/>
+  </visual>
+  <asset>
+    <texture name="sky" type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+  </asset>
+  <worldbody>
+    <light pos="0 0 2" dir="0 0 -1" directional="true"/>
+    <geom name="floor" type="plane" size="0 0 0.05" rgba="0.2 0.3 0.4 1"/>
+    <!-- A fixed table with its top at z=0.75 m; MJCF sizes are half sizes. -->
+    <geom name="table" type="box" pos="0 0 0.375" size="0.6 0.4 0.375" rgba="0.5 0.4 0.3 1"/>
+    <!-- Required: Piper base pose in world coordinates, metres and wxyz. -->
+    <body name="piper_mount" pos="-0.3 0 0.75" quat="1 0 0 0"/>
+    <body name="red_cube" pos="0.15 0 0.78">
+      <freejoint/>
+      <geom type="box" size="0.025 0.025 0.025" mass="0.05" rgba="0.9 0.1 0.1 1"/>
+    </body>
+  </worldbody>
+</mujoco>

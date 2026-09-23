@@ -2,6 +2,27 @@
 
 `Pose.position` uses metres and `Pose.quaternion` uses `(w, x, y, z)`. `PiperRobot.move_joints` takes six radians. `gripper` takes opening width in metres. `state()` returns six arm joints, gripper state, optional end-effector pose, connection status and timestamps.
 
+In MuJoCo, both `state().pose` and `move_p(Pose(...))` use the scene **world**
+frame. The backend transforms targets into the independent Pinocchio model frame
+using the fixed `piper_mount` pose, including its rotation. Real-robot coordinates
+retain the SDK convention.
+
+`piper run --backend mujoco --gui --scene scenes/tabletop.xml` loads a native
+MJCF environment. Omit `--scene` to use the bundled blue sky/checker ground scene;
+`--scene` also works with standalone `run --steps N`. It is rejected for `real`.
+The main XML must contain exactly one empty `worldbody/body` named `piper_mount`
+with an explicit finite three-value `pos` and optional nonzero `quat` (wxyz).
+It cannot be nested, moving, or defined in an include. Other environment content
+supports native includes and relative assets. Validation precedes robot loading.
+
+Python callers can use `PiperRobot.connect("mujoco", {"scene": "scenes/tabletop.xml"})`
+or `MujocoBackend(scene="scenes/tabletop.xml")`. If a shared server is already
+running, an explicit scene request must match its resolved scene path, otherwise
+connection raises an error. Omitting `scene` connects to whichever shared scene
+is running, or uses the default scene when running standalone. Scene changes
+require restarting the host. Explicit legacy `model_path` XML overrides remain
+complete models and cannot be combined with `scene`.
+
 MuJoCo motion commands are nonblocking setpoint commands. `move_p` solves IK
 with Pinocchio using the current measured arm configuration as its seed, then
 writes the resulting joint position targets to MuJoCo position-actuator controls.

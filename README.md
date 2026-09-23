@@ -46,7 +46,25 @@ robot.disconnect()
 piper run --backend mujoco --gui
 ```
 
-读取当前末端位姿（位置 m，四元数顺序 wxyz）：
+不传 `--scene` 时使用 MuJoCo 示例常见的蓝色渐变天空和棋盘地面。指定其他场景：
+
+```bash
+piper run --backend mujoco --gui --scene scenes/tabletop.xml
+# 无窗口运行，也支持 --scene：
+piper run --backend mujoco --steps 100 --scene scenes/tabletop.xml
+```
+
+`--scene` 仅用于 `piper run` 的 MuJoCo 后端，真机后端会拒绝该参数。场景采用原生 MJCF XML；加载机器人和资源前，会检查主 XML 的 `<worldbody>` 下是否有且只有一个空的固定挂载节点：
+
+```xml
+<body name="piper_mount" pos="-0.3 0 0.75" quat="1 0 0 0"/>
+```
+
+`pos` 必填，是基座在世界中的位置，单位米；`quat` 是 wxyz 四元数，可省略以使用单位朝向。该节点不能包含关节、子节点或其他属性，不能嵌在其他 body/frame 中，也不能放在 include 文件内。缺少节点、缺少位置、非有限数值或无效四元数都会报错，不会静默放到原点。其余场景内容可使用 MuJoCo 的 include、相对资源路径、静态物体和可运动物体；机器人及其夹爪、支架、相机由程序整体挂载。可复制 `scenes/tabletop.xml` 修改桌子、物体、灯光和安装位姿。切换场景需要关闭原 GUI 后重新启动，后续控制和相机命令连接这个运行中的场景。
+
+MuJoCo 的 `pose` 输出和 `move-p` 输入统一使用**场景世界坐标**；后端自动转换成 Pinocchio 模型坐标后求解 IK，因此移动或旋转基座不需要修改目标求解器。场景碰撞会影响实际运动，但 IK 本身不提供避障路径。环境通过 MuJoCo 3.2.7+ 的模型装配接口加载；机械臂继续采用 0.002 s 步长、implicitfast 积分器和原有控制参数。
+
+读取当前末端位姿（位置 m，四元数顺序 wxyz；MuJoCo 下为世界坐标）：
 
 ```bash
 piper pose --backend mujoco

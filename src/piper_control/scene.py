@@ -131,7 +131,10 @@ class SceneServer:
 
     def _dispatch(self, conn, payload: dict) -> None:
         command = payload.get("cmd")
-        if command == "state":
+        if command == "scene_info":
+            path = self.backend.scene_path
+            self._respond(conn, {"ok": True, "scene_path": str(path) if path is not None else None})
+        elif command == "state":
             with self.lock:
                 state = self.backend.state()
             self._respond(conn, {"ok": True, "state": _state_to_dict(state)})
@@ -257,6 +260,10 @@ class SceneClient:
         if error_type == "BackendUnavailableError":
             raise BackendUnavailableError(message)
         raise RuntimeError(message)
+
+    def scene_info(self) -> dict:
+        self._send({"cmd": "scene_info"})
+        return self._receive()
 
     def state(self) -> RobotState:
         self._send({"cmd": "state"})

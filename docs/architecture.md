@@ -20,6 +20,21 @@ viewer at about 60 Hz; pacing waits happen outside the shared-scene lock.
 Custom MJCF overrides require a matching `ik_urdf`: connect checks the two FK
 models on scratch data and rejects a mismatch instead of executing incorrect IK.
 
+`backends/scene_builder.py` validates a native MJCF scene before loading the Piper
+assets. Its main XML must explicitly declare a single empty, fixed `piper_mount`
+body directly under worldbody, with finite position and an optional quaternion.
+The complete robot and wrist camera are attached using MuJoCo's `MjSpec` API
+(3.2.7+), preserving environment includes and relative resources while isolating
+the robot's defaults. The scene controls environment geometry, gravity and lights;
+the adapter retains the robot's timestep, integrator and explicit inertias.
+The bundled scene supplies the familiar blue gradient sky and checker floor.
+Robot control addresses are still resolved by name when objects add DOFs or
+actuators. Cartesian commands and state remain in world coordinates; the fixed
+mount transform maps between world and Pinocchio coordinates for IK/FK checks.
+`--scene` is propagated through the macOS viewer launcher and headless run path.
+The shared server exposes its scene path so explicit Python scene requests cannot
+silently attach to a different environment. Switching scenes restarts the host.
+
 `backends/piper_model.py` builds MJCF at startup from the pinned
 `agx_arm_urdf/piper/urdf/piper_with_gripper_description.xacro` and its base URDF.
 It expands this concrete include-only Xacro without ROS. Transforms, joint limits,

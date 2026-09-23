@@ -17,7 +17,7 @@ def _robot(backend: str, can_name: str):
     return PiperRobot.connect(backend, {"can_name": can_name} if backend == "real" else {})
 
 
-def _run_scene_host(duration: float) -> None:
+def _run_scene_host(duration: float, scene: Path | None = None) -> None:
     """Host the shared MuJoCo scene; on macOS re-exec through mjpython for the viewer."""
     if sys.platform == "darwin" and not os.environ.get("PIPER_MUJOCO_GUI_REEXEC"):
         mjpython = Path(sys.executable).with_name("mjpython")
@@ -27,11 +27,13 @@ def _run_scene_host(duration: float) -> None:
         environment["PIPER_MUJOCO_GUI_REEXEC"] = "1"
         source_root = str(Path(__file__).resolve().parents[1])
         environment["PYTHONPATH"] = source_root + os.pathsep + environment.get("PYTHONPATH", "")
-        subprocess.run([str(mjpython), "-m", "piper_control.mujoco_gui", "--duration", str(duration)],
-                       env=environment, check=True)
+        command = [str(mjpython), "-m", "piper_control.mujoco_gui", "--duration", str(duration)]
+        if scene is not None:
+            command.extend(["--scene", str(scene)])
+        subprocess.run(command, env=environment, check=True)
         return
     from .mujoco_gui import run_host
-    run_host(duration)
+    run_host(duration, scene=scene)
 
 
 def _pose_dict(pose: Pose) -> dict[str, list[float]]:
@@ -146,18 +148,27 @@ def stop(backend: str = "mujoco", can_name: str = "can0"):
 
 @app.command()
 def run(backend: str = "mujoco", can_name: str = "can0", steps: int = 0,
-        gui: bool = False, duration: float = 0.0):
+        gui: bool = False, duration: float = 0.0,
+        scene: Annotated[Path | None, typer.Option("--scene", help="MuJoCo scene XML with an explicit piper_mount pose")] = None):
     """Own the shared MuJoCo scene (--gui) or report its current state."""
+    if scene is not None:
+        if backend != "mujoco":
+            raise typer.BadParameter("--scene is only supported by the MuJoCo backend", param_hint="--scene")
+        from .backends.scene_builder import validate_scene
+        try:
+            scene = validate_scene(scene)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc), param_hint="--scene") from exc
     if gui:
         if backend != "mujoco":
             raise typer.BadParameter("--gui is only supported by the MuJoCo backend")
-        _run_scene_host(duration)
+        _run_scene_host(duration, scene=scene)
         return
-    if backend == "mujoco" and steps > 0:
+    if backend == "mujoco" and (steps > 0 or scene is not None):
         # Standalone stepping keeps the documented --steps mode working
         # without requiring a running GUI process.
         from .backends.mujoco import MujocoBackend
-        impl = MujocoBackend(realtime=True)
+        impl = MujocoBackend(realtime=True, scene=scene)
         impl.connect()
         try:
             impl._step(steps)

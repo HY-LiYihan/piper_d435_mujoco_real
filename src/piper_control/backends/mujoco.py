@@ -11,6 +11,7 @@ from ..api.types import JointState, Pose, RobotState
 from ..errors import BackendUnavailableError, IKError, NotConnectedError
 from ..kinematics.ik import PinocchioIK
 from .piper_model import ASSET_ROOT, DEFAULT_MODEL, ARM_JOINTS, FINGER_JOINTS, build_piper_scene
+from .scene_builder import MOUNT_NAME, compile_scene, validate_scene
 
 
 WRIST_D435_MESH = Path(__file__).parents[3] / "vendor/piper_isaac_sim/realsense2_description/meshes/d435.dae"
@@ -31,8 +32,14 @@ ORDINARY_LINK6_FROM_V100_LINK6 = (
 class MujocoBackend:
     def __init__(self, model_path: str | Path = DEFAULT_MODEL, realtime: bool = False,
                  settle_steps: int = 200, wrist_camera: bool = True,
-                 ik_urdf: str | Path = ASSET_ROOT / "piper/urdf/piper_description.urdf", **_: object):
+                 ik_urdf: str | Path = ASSET_ROOT / "piper/urdf/piper_description.urdf",
+                 scene: str | Path | None = None, **_: object):
         self.model_path = Path(model_path)
+        self.scene_path = None
+        if self.model_path.suffix in (".urdf", ".xacro"):
+            self.scene_path = validate_scene(scene)
+        elif scene is not None:
+            raise ValueError("scene requires the Piper URDF/Xacro component; a custom model_path XML is already a complete model")
         self.realtime = realtime
         if settle_steps < 1:
             raise ValueError("settle_steps must be positive")
@@ -56,7 +63,7 @@ class MujocoBackend:
                 tree = build_piper_scene(self.model_path)
                 if self.wrist_camera:
                     self._add_wrist_camera(tree)
-                self.model = mujoco.MjModel.from_xml_string(ET.tostring(tree.getroot(), encoding="unicode"))
+                self.model = compile_scene(tree, self.scene_path)
             else:
                 # Preserve explicit MJCF overrides, including relative mesh paths.
                 if self.wrist_camera:
@@ -88,6 +95,13 @@ class MujocoBackend:
         lower = self.model.jnt_range[joint_ids, 0].copy()
         upper = self.model.jnt_range[joint_ids, 1].copy()
         self.ik = PinocchioIK(self.ik_urdf)
+        pin = self.ik.pin
+        self._world_from_ik = pin.SE3.Identity()
+        if self.scene_path is not None:
+            mujoco.mj_forward(self.model, self.data)
+            mount = self.model.body(MOUNT_NAME).id
+            self._world_from_ik = pin.SE3(self.data.xmat[mount].reshape(3, 3).copy(),
+                                         self.data.xpos[mount].copy())
         self.ik.lower = np.maximum(self.ik.lower, lower)
         self.ik.upper = np.minimum(self.ik.upper, upper)
         if np.any(self.ik.lower >= self.ik.upper):
@@ -97,7 +111,7 @@ class MujocoBackend:
         for q in (np.zeros(6), np.array([.2, .6, -1., .2, -.3, .4])):
             scratch.qpos[self._arm_qpos] = q
             mujoco.mj_forward(self.model, scratch)
-            expected = self.ik.forward(q)
+            expected = self._transform_ik_pose(self.ik.forward(q))
             body = self.model.body("link6").id
             actual_quat = scratch.xquat[body]
             if (not np.allclose(expected.position, scratch.xpos[body], atol=1e-7, rtol=0)
@@ -105,6 +119,19 @@ class MujocoBackend:
                 raise ValueError("Pinocchio URDF and MuJoCo link6 kinematics disagree; provide matching ik_urdf")
         mujoco.mj_forward(self.model, self.data)
         self._connected = True
+
+    def _transform_ik_pose(self, pose: Pose, *, inverse: bool = False) -> Pose:
+        """Convert between the scene world and the independent IK model frame."""
+        pin = self.ik.pin
+        quaternion = np.asarray(pose.quaternion, dtype=float)
+        norm = np.linalg.norm(quaternion)
+        if not np.isfinite(pose.position).all() or not np.isfinite(norm) or norm < 1e-9:
+            raise ValueError("Pose must contain a finite position and nonzero finite quaternion")
+        placement = pin.SE3(pin.Quaternion(*(quaternion / norm)).matrix(), np.asarray(pose.position))
+        transform = self._world_from_ik.inverse() if inverse else self._world_from_ik
+        result = transform * placement
+        quat = pin.Quaternion(result.rotation)
+        return Pose(tuple(result.translation), (quat.w, quat.x, quat.y, quat.z))
 
     def _add_wrist_camera(self, tree: ET.ElementTree) -> None:
         """Attach the retained Isaac D435i assets to the model's link6 frame."""
@@ -403,7 +430,7 @@ class MujocoBackend:
 
     def move_p(self, pose: Pose) -> None:
         self._require()
-        result = self.ik.solve(pose, seed=self.data.qpos[self._arm_qpos])
+        result = self.ik.solve(self._transform_ik_pose(pose, inverse=True), seed=self.data.qpos[self._arm_qpos])
         if not result.success:
             raise IKError(f"Pinocchio IK failed: {result.message}; position={result.position_error:.6g}; orientation={result.orientation_error:.6g}")
         self.move_joints(result.joints)
