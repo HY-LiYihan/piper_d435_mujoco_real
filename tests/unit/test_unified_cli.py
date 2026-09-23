@@ -54,6 +54,10 @@ def test_real_camera_outputs_base_extrinsics_and_camera_only_mode(monkeypatch, t
     assert Path(data["rgb"]).is_file()
     assert Path(data["depth"]).is_file()
 
+    twin_result = runner.invoke(app, ["--backend", "twin", "--robot", "piper", "camera", *output])
+    assert twin_result.exit_code == 0, twin_result.output
+    assert json.loads(twin_result.output)["extrinsics"]["reference_frame"] == "base_link"
+
     monkeypatch.setattr(cli, "_robot", lambda *args: pytest.fail("camera-only mode connected to arm"))
     only_camera = runner.invoke(app, ["--backend", "real", "camera", "--no-extrinsics", *output])
     assert only_camera.exit_code == 0, only_camera.output

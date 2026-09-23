@@ -19,7 +19,7 @@ class RealBackend:
         self._fk = None
         self._connected = False
 
-    def connect(self) -> None:
+    def connect(self, *, piper_init: bool = True) -> None:
         try:
             from piper_sdk import C_PiperInterface
         except ImportError as exc:
@@ -35,8 +35,19 @@ class RealBackend:
         self._fk = PinocchioIK(ASSET_ROOT / "piper/urdf/piper_description.urdf")
         self._sdk = C_PiperInterface(can_name=self.can_name, judge_flag=self.judge_flag,
                                      can_auto_init=True, **self.kwargs)
-        self._sdk.ConnectPort()
+        self._sdk.ConnectPort(piper_init=piper_init)
         self._connected = True
+
+    def gripper_width(self) -> float | None:
+        self._require()
+        feedback = self._sdk.GetArmGripperMsgs()
+        timestamp = float(feedback.time_stamp)
+        if timestamp <= 0 or time.time() - timestamp > 1.0:
+            return None
+        width = float(feedback.gripper_state.grippers_angle) / 1_000_000
+        if not np.isfinite(width):
+            raise BackendUnavailableError("Piper gripper feedback is not finite")
+        return width
 
     def _require(self):
         if not self._connected or self._sdk is None:

@@ -6,7 +6,7 @@ from .types import Pose, RobotState
 from ..backends.mujoco import MujocoBackend
 from ..backends.real import RealBackend
 from ..errors import BackendUnavailableError
-from ..scene import SceneClient
+from ..scene import SceneClient, twin_socket_path
 
 
 class PiperRobot:
@@ -26,8 +26,30 @@ class PiperRobot:
             robot = selected
         if robot not in ("piper", "franka_fr3"):
             raise ValueError(f"unknown robot: {robot}; choose piper or franka_fr3")
-        if robot == "franka_fr3" and backend == "real":
+        if robot == "franka_fr3" and backend in ("real", "twin"):
             raise BackendUnavailableError("FR3 real-robot control is not implemented; use --backend mujoco")
+        if config.get("scene") is not None and backend != "mujoco":
+            raise ValueError("scene is only supported by the MuJoCo backend")
+        if backend in ("real", "twin"):
+            socket_path = config.pop("twin_socket_path", None)
+            twin = SceneClient(socket_path=socket_path or twin_socket_path(), robot="piper")
+            try:
+                twin.connect()
+            except BackendUnavailableError:
+                twin.disconnect()
+                if backend == "twin":
+                    raise BackendUnavailableError("Piper twin is not running; start `robot_control --backend twin` first")
+            else:
+                try:
+                    info = twin.scene_info()
+                    if info.get("mode") != "twin" or info.get("robot") != "piper":
+                        raise BackendUnavailableError("Twin socket does not belong to a Piper real-robot twin")
+                    if info.get("can_name") != config.get("can_name", "can0"):
+                        raise ValueError("Twin is connected to a different CAN interface")
+                except Exception:
+                    twin.disconnect()
+                    raise
+                return cls(twin)
         requested_scene = None
         if config.get("scene") is not None:
             if backend != "mujoco":

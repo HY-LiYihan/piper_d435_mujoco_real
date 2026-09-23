@@ -1,5 +1,7 @@
 from unittest.mock import patch
+import sys
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -48,3 +50,31 @@ def test_real_backend_rejects_missing_feedback():
     backend._connected = True
     with pytest.raises(BackendUnavailableError, match="fresh"):
         backend.state()
+
+
+def test_passive_real_connection_and_gripper_feedback(monkeypatch):
+    calls = []
+
+    class FakeSdk:
+        def __init__(self, **kwargs):
+            calls.append(("create", kwargs["can_name"]))
+
+        def ConnectPort(self, *, piper_init=True):
+            calls.append(("connect", piper_init))
+
+        def DisconnectPort(self):
+            calls.append(("disconnect",))
+
+        def GetArmGripperMsgs(self):
+            return SimpleNamespace(time_stamp=time.time(),
+                                   gripper_state=SimpleNamespace(grippers_angle=40000))
+
+    monkeypatch.setitem(sys.modules, "piper_sdk", SimpleNamespace(C_PiperInterface=FakeSdk))
+    backend = RealBackend(can_name="can1")
+    backend.connect(piper_init=False)
+    try:
+        assert calls[:2] == [("create", "can1"), ("connect", False)]
+        assert backend.gripper_width() == pytest.approx(0.04)
+    finally:
+        backend.disconnect()
+    assert calls[-1] == ("disconnect",)

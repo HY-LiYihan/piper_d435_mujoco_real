@@ -30,6 +30,11 @@ def default_socket_path(robot: str = "piper") -> Path:
     return Path(override) if override else Path(tempfile.gettempdir()) / "piper_scene.sock"
 
 
+def twin_socket_path() -> Path:
+    override = __import__("os").environ.get("PIPER_TWIN_SOCKET")
+    return Path(override) if override else Path(tempfile.gettempdir()) / "piper_twin.sock"
+
+
 def _state_to_dict(state: RobotState) -> dict:
     return {
         "connected": state.connected,
@@ -68,9 +73,10 @@ def _state_from_dict(data: dict) -> RobotState:
 class SceneServer:
     """Host the shared MuJoCo scene and serve CLI requests over a socket."""
 
-    def __init__(self, backend, socket_path=None, robot: str = "piper"):
+    def __init__(self, backend, socket_path=None, robot: str = "piper", mode: str = "mujoco"):
         self.backend = backend
         self.robot = robot
+        self.mode = mode
         self.socket_path = Path(socket_path) if socket_path else default_socket_path(robot)
         self.lock = threading.Lock()
         self._server = None
@@ -95,8 +101,12 @@ class SceneServer:
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             server.bind(str(self.socket_path))
+            if self.mode == "twin":
+                self.socket_path.chmod(0o600)
         except OSError as exc:
             server.close()
+            if self.mode == "twin":
+                self.socket_path.unlink(missing_ok=True)
             raise BackendUnavailableError(
                 f"cannot bind scene socket {self.socket_path}: {exc}"
             ) from exc
@@ -133,7 +143,7 @@ class SceneServer:
             reader = conn.makefile("rb")
             while True:
                 line = reader.readline()
-                if not line:
+                if not line or (self.mode == "twin" and self._server is None):
                     break
                 try:
                     payload = json.loads(line.decode("utf-8"))
@@ -148,8 +158,9 @@ class SceneServer:
     def _dispatch(self, conn, payload: dict) -> None:
         command = payload.get("cmd")
         if command == "scene_info":
-            path = self.backend.scene_path
-            self._respond(conn, {"ok": True, "robot": self.robot,
+            path = getattr(self.backend, "scene_path", None)
+            self._respond(conn, {"ok": True, "robot": self.robot, "mode": self.mode,
+                                 "can_name": getattr(self.backend, "can_name", None),
                                  "scene_path": str(path) if path is not None else None})
         elif command == "state":
             with self.lock:
@@ -172,6 +183,8 @@ class SceneServer:
                 self.backend.stop()
             self._respond(conn, {"ok": True})
         elif command == "camera":
+            if self.mode == "twin":
+                raise BackendUnavailableError("Twin camera capture uses the real RealSense; use `robot_control --backend twin --robot piper camera`")
             self._serve_camera(conn, payload)
         else:
             raise ValueError(f"unknown scene command: {command}")

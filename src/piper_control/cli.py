@@ -23,7 +23,7 @@ def _robot_name(robot: str) -> str:
 
 
 def _robot(backend: str, can_name: str, robot: str = "piper"):
-    return PiperRobot.connect(backend, {"can_name": can_name} if backend == "real" else {},
+    return PiperRobot.connect(backend, {"can_name": can_name} if backend in ("real", "twin") else {},
                               robot=_robot_name(robot))
 
 
@@ -56,14 +56,15 @@ def _selection(ctx: typer.Context, backend: str | None = None, robot: str | None
     if robot is not None and global_robot is not None and _robot_name(robot) != _robot_name(global_robot):
         raise typer.BadParameter("conflicting --robot options", param_hint="--robot")
     selected_backend = backend or global_backend or "mujoco"
-    if selected_backend not in ("mujoco", "real"):
-        raise typer.BadParameter("choose mujoco or real", param_hint="--backend")
+    if selected_backend not in ("mujoco", "real", "twin"):
+        raise typer.BadParameter("choose mujoco, real or twin", param_hint="--backend")
     explicit_robot = robot or global_robot
-    if selected_backend == "real" and not camera and explicit_robot is None:
+    if (selected_backend in ("real", "twin") and not camera and explicit_robot is None
+            and not (selected_backend == "twin" and launch)):
         raise typer.BadParameter("real-robot control requires --robot piper", param_hint="--robot")
     selected_robot = (_robot_name(explicit_robot) if explicit_robot is not None else
-                      "piper" if launch or selected_backend == "real" else _active_robot() or "piper")
-    if selected_backend == "real" and selected_robot == "franka_fr3" and not camera:
+                      "piper" if launch or selected_backend in ("real", "twin") else _active_robot() or "piper")
+    if selected_backend in ("real", "twin") and selected_robot == "franka_fr3":
         raise typer.BadParameter("FR3 real-robot control is not implemented", param_hint="--robot")
     return selected_backend, selected_robot
 
@@ -102,6 +103,25 @@ def _run_scene_host(duration: float, scene: Path | None = None, robot: str = "pi
     run_host(duration, scene=scene, robot=robot)
 
 
+def _run_twin_host(duration: float, scene: Path | None = None, can_name: str = "can0") -> None:
+    if sys.platform == "darwin" and not os.environ.get("PIPER_MUJOCO_GUI_REEXEC"):
+        mjpython = Path(sys.executable).with_name("mjpython")
+        if not mjpython.is_file():
+            raise RuntimeError("Install piper-control[mujoco] in this Python environment to provide mjpython")
+        environment = os.environ.copy()
+        environment["PIPER_MUJOCO_GUI_REEXEC"] = "1"
+        source_root = str(Path(__file__).resolve().parents[1])
+        environment["PYTHONPATH"] = source_root + os.pathsep + environment.get("PYTHONPATH", "")
+        command = [str(mjpython), "-m", "piper_control.twin", "--duration", str(duration),
+                   "--can-name", can_name]
+        if scene is not None:
+            command.extend(["--scene", str(scene)])
+        subprocess.run(command, env=environment, check=True)
+        return
+    from .twin import run_host
+    run_host(duration, scene=scene, can_name=can_name)
+
+
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context, backend: str | None = typer.Option(None, "--backend"),
          robot: str | None = typer.Option(None, "--robot"),
@@ -116,6 +136,14 @@ def main(ctx: typer.Context, backend: str | None = typer.Option(None, "--backend
             raise typer.BadParameter("--no-gui is only valid when starting a scene", param_hint="--no-gui")
         return
     selected_backend, selected_robot = _selection(ctx, launch=True)
+    if selected_backend == "twin":
+        validated = _scene_for(selected_robot, scene)
+        if no_gui:
+            from .twin import run_host
+            run_host(scene=validated, gui=False)
+        else:
+            _run_twin_host(0.0, scene=validated)
+        return
     if selected_backend == "real":
         if scene is not None or no_gui:
             raise typer.BadParameter("--scene and --no-gui require the MuJoCo backend")
@@ -267,21 +295,26 @@ def run(ctx: typer.Context, backend: str | None = None, can_name: str = "can0", 
         gui: bool = False, duration: float = 0.0,
         scene: Annotated[Path | None, typer.Option("--scene", help="MuJoCo scene XML with the selected robot's mount pose")] = None,
         robot: str | None = None):
-    """Own the shared MuJoCo scene (--gui) or report its current state."""
+    """Start a MuJoCo or Piper twin GUI (--gui), or report the current state."""
     scene = scene or ctx.obj["scene"]
-    if scene is not None and (backend or ctx.obj["backend"] or "mujoco") != "mujoco":
-        raise typer.BadParameter("--scene is only supported by the MuJoCo backend", param_hint="--scene")
+    if scene is not None and (backend or ctx.obj["backend"] or "mujoco") == "real":
+        raise typer.BadParameter("--scene is only supported by the MuJoCo or twin backend", param_hint="--scene")
     backend, selected = _selection(ctx, backend, robot, launch=gui or steps > 0 or scene is not None)
     if scene is not None:
         scene = _scene_for(selected, scene)
     if gui:
+        if backend == "twin":
+            _run_twin_host(duration, scene=scene, can_name=can_name)
+            return
         if backend != "mujoco":
-            raise typer.BadParameter("--gui is only supported by the MuJoCo backend")
+            raise typer.BadParameter("--gui is only supported by MuJoCo or twin")
         if selected == "piper":
             _run_scene_host(duration, scene=scene)
         else:
             _run_scene_host(duration, scene=scene, robot=selected)
         return
+    if backend == "twin" and (steps > 0 or scene is not None):
+        raise typer.BadParameter("twin is a real-robot mirror; use --gui to start the viewer")
     if backend == "mujoco" and (steps > 0 or scene is not None):
         # Standalone stepping keeps the documented --steps mode working
         # without requiring a running GUI process.
@@ -311,7 +344,7 @@ def camera(ctx: typer.Context, backend: str | None = None, can_name: str = "can0
     """Capture aligned wrist RGB-D and its base-to-color-optical extrinsics."""
     backend, selected = _selection(ctx, backend, robot, camera=True)
     instance = None
-    if backend == "real":
+    if backend in ("real", "twin"):
         if not no_extrinsics:
             if robot is None and ctx.obj.get("robot") is None:
                 raise typer.BadParameter("real camera extrinsics require --robot piper", param_hint="--robot")
@@ -337,7 +370,7 @@ def camera(ctx: typer.Context, backend: str | None = None, can_name: str = "can0
             frame = cam.read()
         finally:
             cam.disconnect()
-        if backend == "real" and not no_extrinsics:
+        if backend in ("real", "twin") and not no_extrinsics:
             from .sensors.extrinsics import camera_extrinsics, piper_link6_to_color_optical, pose_matrix
             state = instance.state()
             if abs(state.timestamp - frame.timestamp) > 1.0:
