@@ -9,6 +9,13 @@ DEFAULT_SCENE = Path(__file__).parents[1] / "assets/scenes/default.xml"
 MOUNT_NAME = "piper_mount"
 
 
+def _find_body(spec, name: str):
+    body = getattr(spec, "body", None)
+    if callable(body):
+        return body(name)
+    return spec.find_body(name)
+
+
 def validate_scene(path: str | Path | None = None) -> Path:
     """Require an explicit, fixed world-space mounting pose before loading assets.
 
@@ -49,7 +56,12 @@ def compile_scene(robot: ET.ElementTree, path: Path):
 
     environment = mujoco.MjSpec.from_file(str(path))
     component = mujoco.MjSpec.from_string(ET.tostring(robot.getroot(), encoding="unicode"))
-    mount = environment.find_body(MOUNT_NAME)
+    mount = _find_body(environment, MOUNT_NAME)
+    robot_body = _find_body(component, "base_link")
+    if mount is None:
+        raise ValueError(f'Scene does not contain body "{MOUNT_NAME}"')
+    if robot_body is None:
+        raise ValueError('Piper model does not contain body "base_link"')
     # Keep the robot's controller timestep/integrator and explicit inertias.
     # Environment gravity, lights, textures, objects and defaults remain local
     # scene choices; attachment copies robot defaults rather than inheriting them.
@@ -58,5 +70,5 @@ def compile_scene(robot: ET.ElementTree, path: Path):
     environment.compiler.fusestatic = False
     environment.compiler.inertiafromgeom = component.compiler.inertiafromgeom
     environment.compiler.autolimits = True
-    mount.add_frame().attach_body(component.find_body("base_link"), prefix="", suffix="")
+    mount.add_frame().attach_body(robot_body, prefix="", suffix="")
     return environment.compile()

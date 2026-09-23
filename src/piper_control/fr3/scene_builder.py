@@ -7,6 +7,13 @@ DEFAULT_SCENE = Path(__file__).parent / "assets/scenes/default.xml"
 MOUNT_NAME = "fr3_mount"
 
 
+def _find_body(spec, name: str):
+    body = getattr(spec, "body", None)
+    if callable(body):
+        return body(name)
+    return spec.find_body(name)
+
+
 def validate_scene(path: str | Path | None = None) -> Path:
     path = (DEFAULT_SCENE if path is None else Path(path)).expanduser().resolve()
     try:
@@ -40,6 +47,11 @@ def compile_scene(model_path: Path, scene_path: Path):
     environment.option.integrator = robot.option.integrator
     environment.compiler.fusestatic = False
     environment.compiler.autolimits = True
-    environment.find_body(MOUNT_NAME).add_frame().attach_body(
-        robot.find_body("fr3_link0"), prefix="", suffix="")
+    mount = _find_body(environment, MOUNT_NAME)
+    robot_body = _find_body(robot, "fr3_link0")
+    if mount is None:
+        raise ValueError(f'Scene does not contain body "{MOUNT_NAME}"')
+    if robot_body is None:
+        raise ValueError('FR3 model does not contain body "fr3_link0"')
+    mount.add_frame().attach_body(robot_body, prefix="", suffix="")
     return environment.compile()
