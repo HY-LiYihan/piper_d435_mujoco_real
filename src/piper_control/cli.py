@@ -307,13 +307,19 @@ def run(ctx: typer.Context, backend: str | None = None, can_name: str = "can0", 
 @app.command()
 def camera(ctx: typer.Context, backend: str | None = None, can_name: str = "can0",
            rgb_out: Path = Path("wrist_rgb.png"), depth_out: Path = Path("wrist_depth.npy"),
-           robot: str | None = None):
-    """Capture one aligned 1280x720 wrist RGB-D frame."""
+           robot: str | None = None, no_extrinsics: bool = False):
+    """Capture aligned wrist RGB-D and its base-to-color-optical extrinsics."""
     backend, selected = _selection(ctx, backend, robot, camera=True)
     instance = None
     if backend == "real":
+        if not no_extrinsics:
+            if robot is None and ctx.obj.get("robot") is None:
+                raise typer.BadParameter("real camera extrinsics require --robot piper", param_hint="--robot")
+            if selected != "piper":
+                raise typer.BadParameter("FR3 real-robot control is not implemented", param_hint="--robot")
+            instance = _robot("real", can_name, selected)
         from .sensors.realsense import RealSenseCamera
-        cam = RealSenseCamera()
+        cam = RealSenseCamera(frame_id="d435i_color_optical_frame")
     elif backend == "mujoco":
         instance = _robot("mujoco", can_name, selected)
         impl = instance._backend
@@ -325,9 +331,20 @@ def camera(ctx: typer.Context, backend: str | None = None, can_name: str = "can0
                                   camera="d435i_check" if selected == "franka_fr3" else "d435i_color_optical_camera")
     else:
         raise typer.BadParameter(f"unknown backend: {backend}")
-    cam.connect()
     try:
-        frame = cam.read()
+        cam.connect()
+        try:
+            frame = cam.read()
+        finally:
+            cam.disconnect()
+        if backend == "real" and not no_extrinsics:
+            from .sensors.extrinsics import camera_extrinsics, piper_link6_to_color_optical, pose_matrix
+            state = instance.state()
+            if abs(state.timestamp - frame.timestamp) > 1.0:
+                raise BackendUnavailableError("Piper joint feedback and camera capture are not synchronized")
+            frame.extrinsics = camera_extrinsics(
+                pose_matrix(state.pose) @ piper_link6_to_color_optical(),
+                "base_link", frame.frame_id, state.timestamp)
         import numpy as np
         try:
             from PIL import Image
@@ -344,9 +361,15 @@ def camera(ctx: typer.Context, backend: str | None = None, can_name: str = "can0
             "depth_shape": list(frame.depth.shape),
             "frame_id": frame.frame_id,
             "depth_scale": frame.depth_scale,
+            "extrinsics": None if frame.extrinsics is None else {
+                "reference_frame": frame.extrinsics.reference_frame,
+                "camera_frame": frame.extrinsics.camera_frame,
+                "rotation_row_major": list(frame.extrinsics.rotation),
+                "translation_m": list(frame.extrinsics.translation),
+                "timestamp": frame.extrinsics.timestamp,
+            },
         }, indent=2))
     finally:
-        cam.disconnect()
         if instance is not None:
             instance.disconnect()
 

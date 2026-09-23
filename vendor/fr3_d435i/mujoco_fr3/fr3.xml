@@ -168,7 +168,7 @@
                             <geom mesh="d435i_8" mass="0" material="rs_Metal_Casing" class="visual" name="rs_visual_d435i_8" pos="0.0043 -0.0175 0" quat="0.5 0.5 0.5 0.5" />
                             <site name="d435i_depth_optical_frame" quat="0.5 -0.5 0.5 -0.5" size=".001" />
                             <site name="d435i_color_optical_frame" pos="0 .015 0" quat="0.5 -0.5 0.5 -0.5" size=".001" />
-                            <camera name="d435i_check" pos="0 0 0" xyaxes="0 -1 0 0 0 1" fovy="60" />
+                            <camera name="d435i_check" pos="0 .015 0" xyaxes="0 -1 0 0 0 1" fovy="60" />
                           </body>
                         </body>
                         <body name="fr3_leftfinger" pos="0 0 0.0584">

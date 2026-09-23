@@ -6,6 +6,8 @@ from pathlib import Path
 import numpy as np
 from ..api.types import JointState, Pose, RobotState
 from ..errors import BackendUnavailableError, NotConnectedError
+from ..kinematics.ik import PinocchioIK
+from .piper_model import ASSET_ROOT
 
 
 class RealBackend:
@@ -14,6 +16,7 @@ class RealBackend:
     def __init__(self, can_name: str = "can0", judge_flag: bool = False, **kwargs):
         self.can_name, self.judge_flag, self.kwargs = can_name, judge_flag, kwargs
         self._sdk = None
+        self._fk = None
         self._connected = False
 
     def connect(self) -> None:
@@ -29,6 +32,7 @@ class RealBackend:
                     raise BackendUnavailableError("Install the pinned vendor/piper_sdk package") from exc
             else:
                 raise BackendUnavailableError("Install the pinned vendor/piper_sdk package") from exc
+        self._fk = PinocchioIK(ASSET_ROOT / "piper/urdf/piper_description.urdf")
         self._sdk = C_PiperInterface(can_name=self.can_name, judge_flag=self.judge_flag,
                                      can_auto_init=True, **self.kwargs)
         self._sdk.ConnectPort()
@@ -42,15 +46,21 @@ class RealBackend:
         if self._sdk is not None:
             self._sdk.DisconnectPort()
         self._connected = False
+        self._fk = None
 
     def state(self) -> RobotState:
         self._require()
         msg = self._sdk.GetArmJointMsgs()
+        timestamp = float(msg.time_stamp)
+        if timestamp <= 0 or time.time() - timestamp > 1.0:
+            raise BackendUnavailableError("No fresh Piper joint feedback is available")
         names = ("joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6")
-        values = [getattr(msg.joint_state, name, 0.0) for name in names]
-        # SDK messages are scaled integer values; callers can override conversion in a future firmware adapter.
+        values = [getattr(msg.joint_state, name) for name in names]
         joints = np.deg2rad(np.asarray(values, dtype=float) * 0.001)
-        return RobotState(True, False, JointState(joints, timestamp=time.time()))
+        if not np.isfinite(joints).all():
+            raise BackendUnavailableError("Piper joint feedback is not finite")
+        return RobotState(True, False, JointState(joints, timestamp=timestamp),
+                          self._fk.forward(joints), timestamp=timestamp)
 
     def move_joints(self, joints):
         self._require()

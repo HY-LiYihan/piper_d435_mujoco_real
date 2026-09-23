@@ -104,6 +104,13 @@ def test_fr3_mujoco_and_shared_scene():
             backend.wait_until_idle(6)
             assert robot.state().joints.gripper == pytest.approx(.04, abs=.001)
             frame = robot._backend.read(width=160, height=120)
+            assert frame.extrinsics.reference_frame == "fr3_link0"
+            assert frame.extrinsics.camera_frame == frame.frame_id == "d435i_color_optical_frame"
+            site = backend.model.site("d435i_color_optical_frame").id
+            camera = backend.model.camera("d435i_check").id
+            np.testing.assert_allclose(backend.data.cam_xpos[camera], backend.data.site_xpos[site], atol=1e-8)
+            np.testing.assert_allclose(backend.data.cam_xmat[camera].reshape(3, 3),
+                                       backend.data.site_xmat[site].reshape(3, 3) @ np.diag([1, -1, -1]), atol=1e-8)
             assert frame.color.shape == (120, 160, 3)
             assert frame.depth.shape == (120, 160)
             assert frame.depth.dtype == np.float32

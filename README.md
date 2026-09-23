@@ -140,6 +140,13 @@ robot_control camera \
   --rgb-out wrist_rgb.png --depth-out wrist_depth.npy
 ```
 
+`camera` also prints the camera extrinsics in JSON. `translation_m` and the
+row-major `rotation_row_major` describe `T_base_color_optical`: points in
+`d435i_color_optical_frame` are transformed into `base_link` for Piper or
+`fr3_link0` for FR3. On Piper real hardware, the transform is computed from
+joint feedback and the shared URDF. Use `--no-extrinsics` for a standalone
+RealSense capture without a connected Piper arm.
+
 关节命令使用弧度，并采用选项形式以支持负数：
 
 ```bash
@@ -151,7 +158,7 @@ MuJoCo 启动时读取 `vendor/agx_arm_urdf/piper/urdf/piper_with_gripper_descri
 
 IK 使用 Pinocchio（安装包名 `pin`），读取同一官方机械臂 URDF，求解末端 `link6` 的关节目标。`move_p`、`move_joints` 和 `gripper` 仅下发执行器控制目标，不改写实际关节位置或速度。GUI 持续推进物理仿真；独立脚本可调用 `robot.step(n)` 或 `robot.wait_until_idle()`。CLI 运动命令会等待实际运动完成后返回；超时会报错，不会强制关节到位。`stop()` 下发当前位置保持目标，通过执行器减速。
 
-位置执行器、阻尼和经执行器限力的重力补偿由本项目配置。D435 外壳及打印支架仍使用旧 Isaac 仓库的两个 DAE 文件，外壳显示为带高光的银色，打印支架为黑色；材质设置位于 `backends/mujoco.py`，属于本地外观配置。默认照明适当调亮以显示深色机械臂细节。相机安装变换和 nominal extrinsics 保留在本项目代码中，未做实机重新标定。真机 SDK/固件 IK 控制路径与原有 0–0.07 m 夹爪限制暂不改变。已经运行的 GUI/共享场景需重启才能加载新模型和控制逻辑。macOS GUI 使用当前 Python 环境旁的 `mjpython`，请在同一环境安装依赖。
+位置执行器、阻尼和经执行器限力的重力补偿由本项目配置。D435 外壳及打印支架仍使用旧 Isaac 仓库的两个 DAE 文件，外壳显示为带高光的银色，打印支架为黑色；材质设置位于 `backends/mujoco.py`，属于本地外观配置。默认照明适当调亮以显示深色机械臂细节。相机安装变换和 nominal extrinsics 保留在本项目代码中，未做实机重新标定。真机 `state()` 与仿真统一返回关节反馈和末端 `link6` 位姿；真机末端位姿由同一份 Piper URDF 对反馈关节做 FK 得到。真机 SDK/固件 IK 控制路径与原有 0–0.07 m 夹爪限制暂不改变。已经运行的 GUI/共享场景需重启才能加载新模型和控制逻辑。macOS GUI 使用当前 Python 环境旁的 `mjpython`，请在同一环境安装依赖。
 
 ## 开发
 

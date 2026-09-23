@@ -5,6 +5,7 @@ pytest.importorskip("mujoco")
 
 from piper_control.backends.mujoco import MujocoBackend
 from piper_control.sensors.mujoco_rgbd import MujocoRGBDCamera
+from piper_control.sensors.extrinsics import piper_link6_to_color_optical, pose_matrix
 
 
 FRAME_NAMES = (
@@ -55,6 +56,17 @@ def test_mujoco_rgbd_contract():
         camera.connect()
         try:
             frame = camera.read()
+            assert frame.extrinsics.reference_frame == "base_link"
+            assert frame.extrinsics.camera_frame == frame.frame_id
+            actual = np.eye(4)
+            actual[:3, :3] = np.asarray(frame.extrinsics.rotation).reshape(3, 3)
+            actual[:3, 3] = frame.extrinsics.translation
+            expected = pose_matrix(backend.state().pose) @ piper_link6_to_color_optical()
+            base = backend.model.body("base_link").id
+            base_pose = np.eye(4)
+            base_pose[:3, :3] = backend.data.xmat[base].reshape(3, 3)
+            base_pose[:3, 3] = backend.data.xpos[base]
+            np.testing.assert_allclose(actual, np.linalg.inv(base_pose) @ expected, atol=2e-7)
             assert frame.color.shape == (720, 1280, 3)
             assert frame.color.dtype == np.uint8
             assert frame.depth.shape == (720, 1280)

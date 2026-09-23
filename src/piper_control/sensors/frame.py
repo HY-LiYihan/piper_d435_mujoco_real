@@ -18,6 +18,9 @@ class CameraIntrinsics:
 class CameraExtrinsics:
     rotation: tuple[float, ...]
     translation: tuple[float, float, float]
+    reference_frame: str = "base_link"
+    camera_frame: str = "d435i_color_optical_frame"
+    timestamp: float | None = None
 
 
 @dataclass

@@ -13,7 +13,7 @@ dependencies = ["numpy>=1.24", "typer>=0.9"]
 [project.optional-dependencies]
 # The pinned Pinocchio wheel links against urdfdom 4 and TinyXML2 10.
 mujoco = ["mujoco>=3.2.7", "pin==3.9.0", "cmeel-urdfdom>=4,<5", "cmeel-tinyxml2>=10,<11", "Pillow>=10"]
-real = ["python-can>=3.3.4"]
+real = ["python-can>=3.3.4", "pin==3.9.0", "cmeel-urdfdom>=4,<5", "cmeel-tinyxml2>=10,<11"]
 camera = ["pyrealsense2>=2.50", "Pillow>=10"]
 dev = ["pytest>=8", "pytest-cov>=5"]
 

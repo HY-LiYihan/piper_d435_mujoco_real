@@ -75,6 +75,15 @@ Both camera providers return `RGBDFrame`: RGB is `uint8 HxWx3`, depth is `float3
 
 The public unit conventions are metres, radians and `(w, x, y, z)` quaternions. ROS 2 is intentionally not a first-stage dependency.
 
+`RobotState.pose` is the measured end-effector pose for both MuJoCo and the
+Piper real backend. MuJoCo reads `link6` directly; the real backend computes
+the same `link6` FK from joint feedback and the pinned Piper URDF. RGB-D
+frames may carry `T_base_color_optical` extrinsics: the fixed wrist-camera
+transform is shared by the Piper model and the real-camera path, while FR3
+uses `fr3_link0` as its reference frame. The CLI captures and reports these
+extrinsics with each `camera` frame; `--no-extrinsics` keeps camera-only
+capture available.
+
 The upstream Isaac asset repository contains DAE paths that differ only by letter case. On case-insensitive macOS filesystems that submodule can appear dirty immediately after checkout, so `.gitmodules` ignores submodule worktree dirt while the pinned gitlink SHA remains authoritative.
 # FR3 selection
 

@@ -10,6 +10,10 @@ import numpy as np
 from ..api.types import JointState, Pose, RobotState
 from ..errors import BackendUnavailableError, IKError, NotConnectedError
 from ..kinematics.ik import PinocchioIK
+from ..sensors.extrinsics import (ORDINARY_LINK6_FROM_V100_LINK6,
+                                  PIPER_MOUNT_V100_POSITION, PIPER_MOUNT_V100_RPY,
+                                  PIPER_CAMERA_LINK_OFFSET, PIPER_COLOR_FRAME_OFFSET,
+                                  PIPER_OPTICAL_RPY)
 from .piper_model import ASSET_ROOT, DEFAULT_MODEL, ARM_JOINTS, FINGER_JOINTS, build_piper_scene
 from .scene_builder import MOUNT_NAME, compile_scene, validate_scene
 
@@ -21,14 +25,6 @@ WRIST_STAND_MESH = Path(__file__).parents[3] / "vendor/piper_isaac_sim/piper_des
 # ordinary Piper MuJoCo model has a fixed tool-frame rotation relative to that
 # frame; this constant converts the official V100 wrist mount into link6 of the
 # ordinary Piper without changing the arm's own kinematics.
-ORDINARY_LINK6_FROM_V100_LINK6 = (
-    (0.0, -1.0, 0.0, -0.00009777),
-    (1.0, 0.0, 0.0, 0.00141648),
-    (0.0, 0.0, 1.0, 0.0),
-    (0.0, 0.0, 0.0, 1.0),
-)
-
-
 class MujocoBackend:
     def __init__(self, model_path: str | Path = DEFAULT_MODEL, realtime: bool = False,
                  settle_steps: int = 200, wrist_camera: bool = True,
@@ -225,10 +221,10 @@ class MujocoBackend:
         ET.SubElement(stand, "geom", type="mesh", mesh="d435i_printed_stand",
                       material="d435i_black_print", contype="0", conaffinity="0")
 
-        mount_v100 = transform_xyz_rpy([-0.0315, 0.064, 0.027], [0.0, -1.22, -1.57])
+        mount_v100 = transform_xyz_rpy(PIPER_MOUNT_V100_POSITION, PIPER_MOUNT_V100_RPY)
         mount = body_from_transform(link6, "d435i_link", mat_mul(ordinary_from_v100, mount_v100))
         camera_link = ET.SubElement(mount, "body", name="d435i_camera_link",
-                                    pos="0.0106 0.0175 0.0125")
+                                    pos=values(PIPER_CAMERA_LINK_OFFSET))
         # MuJoCo requires every dynamic body to have a positive mass.  The
         # camera is fixed and non-colliding, so use a negligible inertial proxy
         # instead of letting the visual mesh change the Piper dynamics.
@@ -244,8 +240,8 @@ class MujocoBackend:
 
         depth = fixed_frame(camera_link, "d435i_depth_frame")
         depth_optical = fixed_frame(depth, "d435i_depth_optical_frame", rpy=[-math.pi / 2, 0.0, -math.pi / 2])
-        color = fixed_frame(camera_link, "d435i_color_frame", pos="0 0.015 0")
-        color_optical = fixed_frame(color, "d435i_color_optical_frame", rpy=[-math.pi / 2, 0.0, -math.pi / 2])
+        color = fixed_frame(camera_link, "d435i_color_frame", pos=values(PIPER_COLOR_FRAME_OFFSET))
+        color_optical = fixed_frame(color, "d435i_color_optical_frame", rpy=PIPER_OPTICAL_RPY)
         infra1 = fixed_frame(camera_link, "d435i_infra1_frame")
         fixed_frame(infra1, "d435i_infra1_optical_frame", rpy=[-math.pi / 2, 0.0, -math.pi / 2])
         infra2 = fixed_frame(camera_link, "d435i_infra2_frame", pos="0 -0.05 0")

@@ -1,15 +1,66 @@
+import json
 from pathlib import Path
+import time
+
+import numpy as np
 
 from typer.testing import CliRunner
 import pytest
 
 from piper_control import cli
+from piper_control.api.types import Pose
 from piper_control.cli import app
 from piper_control.errors import BackendUnavailableError
 from piper_control.scene import SceneClient, SceneServer
+from piper_control.sensors.frame import CameraIntrinsics, RGBDFrame
+from piper_control.sensors import realsense
+from piper_control.sensors.extrinsics import piper_link6_to_color_optical
 
 
 runner = CliRunner()
+
+
+def test_real_camera_outputs_base_extrinsics_and_camera_only_mode(monkeypatch, tmp_path):
+    class Camera:
+        def __init__(self, **kwargs):
+            pass
+
+        def connect(self):
+            pass
+
+        def disconnect(self):
+            pass
+
+        def read(self):
+            return RGBDFrame(np.zeros((2, 2, 3), dtype=np.uint8),
+                             np.ones((2, 2), dtype=np.uint16), time.time(),
+                             "d435i_color_optical_frame", CameraIntrinsics(2, 2, 1, 1, 1, 1), 0.001)
+
+    class Robot:
+        def state(self):
+            return type("State", (), {"pose": Pose((0, 0, 0)), "timestamp": time.time()})()
+
+        def disconnect(self):
+            pass
+
+    monkeypatch.setattr(realsense, "RealSenseCamera", Camera)
+    monkeypatch.setattr(cli, "_robot", lambda *args: Robot())
+    output = ["--rgb-out", str(tmp_path / "rgb.png"), "--depth-out", str(tmp_path / "depth.npy")]
+    result = runner.invoke(app, ["--backend", "real", "--robot", "piper", "camera", *output])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["extrinsics"]["reference_frame"] == "base_link"
+    np.testing.assert_allclose(data["extrinsics"]["translation_m"], piper_link6_to_color_optical()[:3, 3])
+    assert Path(data["rgb"]).is_file()
+    assert Path(data["depth"]).is_file()
+
+    monkeypatch.setattr(cli, "_robot", lambda *args: pytest.fail("camera-only mode connected to arm"))
+    only_camera = runner.invoke(app, ["--backend", "real", "camera", "--no-extrinsics", *output])
+    assert only_camera.exit_code == 0, only_camera.output
+    assert json.loads(only_camera.output)["extrinsics"] is None
+    missing_arm = runner.invoke(app, ["--backend", "real", "camera", *output])
+    assert missing_arm.exit_code == 2
+    assert "--robot piper" in missing_arm.output
 
 
 def test_root_launches_gui_for_selected_robot(monkeypatch):

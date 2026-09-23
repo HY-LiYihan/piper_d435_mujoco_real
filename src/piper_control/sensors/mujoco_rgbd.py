@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 import numpy as np
 from .frame import CameraIntrinsics, RGBDFrame
+from .extrinsics import camera_extrinsics
 from ..errors import BackendUnavailableError
 
 
@@ -34,6 +35,7 @@ class MujocoRGBDCamera:
         if self._renderer is None:
             raise RuntimeError("camera is not connected")
         import mujoco
+        mujoco.mj_forward(self.model, self.data)
         self._renderer.update_scene(self.data, camera=self.camera)
         self._renderer.enable_depth_rendering()
         depth = self._renderer.render().copy()
@@ -47,4 +49,23 @@ class MujocoRGBDCamera:
         fy = self.height / (2 * np.tan(fovy / 2))
         fx = fy
         intr = CameraIntrinsics(self.width, self.height, fx, fy, self.width / 2, self.height / 2)
-        return RGBDFrame(color, depth, time.time(), self.frame_id, intr, 1.0)
+        fr3 = self.camera == "d435i_check"
+        base_name = "fr3_link0" if fr3 else "base_link"
+        base = self.model.body(base_name).id
+        base_rotation = self.data.xmat[base].reshape(3, 3)
+        if fr3:
+            optical = self.model.site("d435i_color_optical_frame").id
+            optical_position = self.data.site_xpos[optical]
+            optical_rotation = self.data.site_xmat[optical].reshape(3, 3)
+            frame_id = "d435i_color_optical_frame"
+        else:
+            optical = self.model.body("d435i_color_optical_frame").id
+            optical_position = self.data.xpos[optical]
+            optical_rotation = self.data.xmat[optical].reshape(3, 3)
+            frame_id = self.frame_id
+        transform = np.eye(4)
+        transform[:3, :3] = base_rotation.T @ optical_rotation
+        transform[:3, 3] = base_rotation.T @ (optical_position - self.data.xpos[base])
+        timestamp = time.time()
+        extrinsics = camera_extrinsics(transform, base_name, frame_id, timestamp)
+        return RGBDFrame(color, depth, timestamp, frame_id, intr, 1.0, extrinsics)

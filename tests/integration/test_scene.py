@@ -79,6 +79,10 @@ def test_client_camera_round_trip(scene):
     client = _client(socket_path)
     try:
         frame = client.read()
+        assert frame.extrinsics is not None
+        assert frame.extrinsics.reference_frame == "base_link"
+        assert frame.extrinsics.camera_frame == frame.frame_id
+        assert frame.extrinsics.timestamp == frame.timestamp
         assert frame.color.shape == (720, 1280, 3)
         assert frame.color.dtype == np.uint8
         assert frame.depth.shape == (720, 1280)

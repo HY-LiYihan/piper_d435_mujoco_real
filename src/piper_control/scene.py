@@ -19,7 +19,7 @@ import numpy as np
 
 from .api.types import JointState, Pose, RobotState
 from .errors import BackendUnavailableError, IKError, NotConnectedError
-from .sensors.frame import CameraIntrinsics, RGBDFrame
+from .sensors.frame import CameraExtrinsics, CameraIntrinsics, RGBDFrame
 
 
 def default_socket_path(robot: str = "piper") -> Path:
@@ -204,6 +204,13 @@ class SceneServer:
             "depth_shape": list(frame.depth.shape),
             "intrinsics": {"width": intr.width, "height": intr.height, "fx": intr.fx,
                            "fy": intr.fy, "cx": intr.cx, "cy": intr.cy},
+            "extrinsics": None if frame.extrinsics is None else {
+                "rotation": list(frame.extrinsics.rotation),
+                "translation": list(frame.extrinsics.translation),
+                "reference_frame": frame.extrinsics.reference_frame,
+                "camera_frame": frame.extrinsics.camera_frame,
+                "timestamp": frame.extrinsics.timestamp,
+            },
         }
         try:
             conn.sendall((json.dumps(header) + "\n").encode("utf-8"))
@@ -327,5 +334,9 @@ class SceneClient:
         intr = CameraIntrinsics(header["intrinsics"]["width"], header["intrinsics"]["height"],
                                 header["intrinsics"]["fx"], header["intrinsics"]["fy"],
                                 header["intrinsics"]["cx"], header["intrinsics"]["cy"])
+        info = header.get("extrinsics")
+        extrinsics = (CameraExtrinsics(tuple(info["rotation"]), tuple(info["translation"]),
+                                       info["reference_frame"], info["camera_frame"], info["timestamp"])
+                      if info is not None else None)
         return RGBDFrame(color, depth, header["timestamp"], header["frame_id"], intr,
-                         header["depth_scale"])
+                         header["depth_scale"], extrinsics)
