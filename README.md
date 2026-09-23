@@ -43,7 +43,7 @@ robot_control --backend mujoco --robot franka_fr3 --no-gui
 ```bash
 robot_control state
 robot_control pose
-robot_control move-joints --j1 0 --j2 0 --j3 0 --j4 -1.57 --j5 0 --j6 1.57 --j7 -0.785
+robot_control move-joints --j1 0 --j2 0 --j3 0 --j4 -1.57 --j5 0 --j6 1.57 --j7 0.785
 robot_control move-p --x 0.55 --y 0 --z 0.73
 robot_control gripper 0.04
 robot_control camera --rgb-out wrist_rgb.png --depth-out wrist_depth.npy

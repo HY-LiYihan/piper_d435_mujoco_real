@@ -4,6 +4,8 @@ FR3 + Franka Hand + CNC 腕部连接件 + D435i 模型来自用户提供的 `fr3
 
 与单独 FR3 仓库一样，模型的无质量相机节点增加了 70 g **仿真**惯量，七个机械臂链节开启 MuJoCo 重力补偿，使位置执行器收敛。这不是官方硬件动力学标定值。机械臂七轴、双指夹爪、相机和支架均来自附件，七轴 IK 使用其 URDF，通过两组位姿对照验证 MJCF / URDF 的运动学一致性；IK 不避障。
 
+FR3 启动时的七轴初始位姿与执行器目标均为 `[0, 0, 0, -1.57, 0, 1.57, 0.785]` 弧度；夹爪初始开口仍为 0.04 米。
+
 使用 `robot_control --backend mujoco --robot franka_fr3` 在默认棋盘场景启动 GUI；或添加 `--scene scenes/fr3_tabletop.xml`。启动后在另一个终端执行 `robot_control state` 等命令时，可省略 `--robot`，程序会选择当前运行的 FR3；两种机器人同时运行时需显式指定。自定义 MJCF 主文件的 `worldbody` 必须直接包含一个空的固定安装节点：
 
 ```xml
@@ -20,7 +22,7 @@ from piper_control import Robot
 arm = Robot.connect("mujoco", robot="franka_fr3")
 try:
     print(arm.state())
-    arm.move_joints([0, 0, 0, -1.57, 0, 1.57, -0.785])
+    arm.move_joints([0, 0, 0, -1.57, 0, 1.57, 0.785])
     arm.wait_until_idle()
     arm.gripper(0.04)
     arm.wait_until_idle()

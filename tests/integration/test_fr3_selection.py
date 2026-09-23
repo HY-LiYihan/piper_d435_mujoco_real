@@ -1,6 +1,8 @@
 import numpy as np
 import pytest
 from typer.testing import CliRunner
+from pathlib import Path
+from uuid import uuid4
 
 from piper_control import PiperRobot
 from piper_control.api.types import JointState
@@ -79,6 +81,9 @@ def test_fr3_mujoco_and_shared_scene():
 
     backend = MujocoBackend()
     backend.connect()
+    expected_home = np.array([0, 0, 0, -1.57, 0, 1.57, .785])
+    np.testing.assert_allclose(backend.state().joints.positions, expected_home, atol=1e-9)
+    np.testing.assert_allclose(backend.data.ctrl[backend._arm_actuators], expected_home, atol=1e-9)
     socket_path = Path("/tmp") / f"fr3-{uuid4().hex[:12]}.sock"
     server = SceneServer(backend, socket_path=socket_path, robot="franka_fr3")
     server.start()
@@ -108,5 +113,3 @@ def test_fr3_mujoco_and_shared_scene():
     finally:
         server.stop()
         backend.disconnect()
-from pathlib import Path
-from uuid import uuid4
