@@ -1,4 +1,4 @@
-# Franka FR3 仿真
+# Franka FR3 仿真与 twin
 
 FR3 + Franka Hand + CNC 腕部连接件 + D435i 模型来自用户提供的 `fr3_d435i_wrist_camera_mount_release(1)`。`vendor/fr3_d435i/` 保存了原始 MJCF、URDF、网格、预览图、README 和许可文件。模型许可请分别查看 `vendor/fr3_d435i/mujoco_fr3/LICENSE`、`vendor/fr3_d435i/licenses/`；仓库根目录 MIT 许可仅适用于本项目代码。模型快照不是 submodule，克隆后即可从源码加载。
 
@@ -12,7 +12,7 @@ FR3 启动时的七轴初始位姿与执行器目标均为 `[0, 0, 0, -1.57, 0, 
 <body name="fr3_mount" pos="0 0 0" quat="1 0 0 0"/>
 ```
 
-`pos` 必填，单位米；`quat` 是可选的 wxyz 四元数。FR3 的 `move-p` 位姿对应 `fr3_link7`；操作者已确认真机与仿真的末端坐标系语义相同。仿真相机使用模型中的 `d435i_check`。仿真深度是 MuJoCo 渲染深度，不等同于 D435i 物理测量。若有 USB RealSense，`robot_control --backend real camera --no-extrinsics` 仅采集相机，不控制机械臂。FR3 真机使用本地 pylibfranka 直连 FCI；相机真机外参尚未支持 FR3，运动尚未经过真机验证。
+`pos` 必填，单位米；`quat` 是可选的 wxyz 四元数。FR3 的 `move-p` 位姿对应 `fr3_link7`；操作者已确认真机与仿真的末端坐标系语义相同。仿真相机使用模型中的 `d435i_check`。仿真深度是 MuJoCo 渲染深度，不等同于 D435i 物理测量。若有 USB RealSense，`robot_control --backend real camera --no-extrinsics` 仅采集相机，不控制机械臂。FR3 真机使用本地 pylibfranka 直连 FCI；相机真机外参尚未支持 FR3，运动尚未经过真机验证。`robot_control --backend twin --robot franka_fr3` 使用真机反馈镜像七轴和夹爪，第二终端通过 `--backend real --robot franka_fr3` 复用其 FCI 连接；镜像启动时不会主动移动真机。详见 `README.md`。
 
 Python 示例：
 
