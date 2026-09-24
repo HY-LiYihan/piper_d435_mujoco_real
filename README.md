@@ -1,6 +1,6 @@
 # Robot Control
 
-统一的 Piper / Franka FR3 Python API、MuJoCo 仿真、真机和 D435i RGB-D 接口。发行包为 `robot-control`，Python 包和唯一命令为 `robot_control`，公共类为 `Robot`。启动时不传 `--robot` 默认 Piper；`--robot franka_fr3` 启动七轴 FR3。`pepper` 也作为 Piper 的机型别名接受。
+统一的 Piper / Franka FR3 Python API、MuJoCo 仿真、真机和 D435i RGB-D 接口。发行包为 `robot-control`，Python 包和唯一命令为 `robot_control`，公共类为 `Robot`。启动时不传 `--robot` 默认 Piper；`--robot franka_fr3` 启动七轴 FR3。Piper 每次启动都会自动移动到 `[0°, 30°, -45°, 0°, 60°, 0°]`；`pepper` 也作为 Piper 的机型别名接受。
 
 ## 上游版本
 
