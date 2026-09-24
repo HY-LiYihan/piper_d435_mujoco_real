@@ -21,7 +21,7 @@ python -m pip install -e ".[mujoco,dev]"
 pip install -e ".[real,camera]"  # 需要真机/RealSense 时
 ```
 
-FR3 的 `vendor` 模型目录按源码路径读取，使用上述**可编辑安装**。`[real]` 仅用于 Piper 真机；FR3 真机运动控制未实现，也未进行硬件测试。Piper twin 同时需要 `[mujoco,real]`，采集真相机还需 `[camera]`。真相机取帧可独立使用 `robot_control --backend real camera`。
+FR3 的 `vendor` 模型目录按源码路径读取，使用上述**可编辑安装**。FR3 真机通过运行命令的 Linux 主机直接使用 `pylibfranka` / `libfranka` 连接 FCI，不经过 HTTP 服务；需要在该主机另外安装匹配的 `pylibfranka` 和 `libfranka`（支持项目根目录 `vendor/libfranka/libfranka.so.0.13.5` 或系统安装）。`[real]` 包含 Piper 所需依赖，不会自动安装 Franka 的绑定。FR3 真机运动尚未经过硬件测试。Piper twin 同时需要 `[mujoco,real]`，采集真相机还需 `[camera]`。真相机取帧可独立使用 `robot_control --backend real camera`。
 
 ## 统一命令与自动选择
 
@@ -52,15 +52,25 @@ robot_control stop
 
 控制命令的 `--robot` 选择顺序为：显式指定 > 当前唯一运行的 MuJoCo 场景 > 无场景时默认 Piper（独立仿真）。Piper 和 FR3 场景同时运行时，必须显式指定 `--robot`，例如 `robot_control --robot franka_fr3 state`。两种机器人的 GUI 使用不同 socket，客户端不会误连另一种机器人。FR3 `move-joints` 必须传 `--j7`，Piper 不可传。
 
-**真机**默认不使用 MuJoCo GUI。为了避免误操作，真机运动或状态命令必须显式写 `--backend real --robot piper`：
+**真机**默认不使用 MuJoCo GUI。为了避免误操作，真机运动或状态命令必须显式写 `--backend real` 和机器人型号：
 
 ```bash
 robot_control --backend real --robot piper state
 robot_control --backend real --robot piper gripper 0.02
+robot_control --backend real --robot franka_fr3 state
+robot_control --backend real --robot franka_fr3 pose
 robot_control --backend real camera   # 仅采集本机 D435i，无需连接机械臂
 ```
 
-FR3 真机运动控制 (`--backend real --robot franka_fr3`) 会明确报错。Python API 使用 `PiperRobot.connect("mujoco", robot="franka_fr3")` 或 `Robot.connect(...)`。FR3 场景必须包含 `fr3_mount`，Piper 场景仍使用 `piper_mount`，参见 `docs/fr3.md`。
+FR3 真机使用 `FRANKA_ROBOT_IP`（默认 `192.168.1.6`）直连；`FRANKA_MOVE_DURATION_S`（默认 8 秒）和 `FRANKA_RT_PRIORITY`（默认 80）控制轨迹时长及 Linux FIFO 调度。运动命令需输入 `MOVE_JOINTS`、`MOVE_POSE` 或 `MOVE_GRIPPER` 确认；七轴默认弧度，末端位置米，四元数使用 CLI 的 WXYZ 顺序：
+
+```bash
+robot_control --backend real --robot franka_fr3 move-joints --j1 0 --j2 -45 --j3 0 --j4 -135 --j5 0 --j6 90 --j7 45 --degrees --duration 8
+robot_control --backend real --robot franka_fr3 move-p --x 0.6 --y -0.1 --z 0.4 --duration 8
+robot_control --backend real --robot franka_fr3 gripper 0.05 --speed 0.05
+```
+
+以上仅为参数格式示例，**不是安全目标位姿**，不能直接照抄在真机执行。后端检查 Idle、错误、状态变化和末端旋转 10° 上限；没有实现 `command.md` 所称的每轴 0.1 rad 目标变化上限或笛卡尔避障。`stop` 是软件停止命令，不能代替实体急停。Python API 可使用 `PiperRobot.connect("real", robot="franka_fr3")`；API 调用不会弹出 CLI 确认提示，调用方应自行确认目标。FR3 的 twin 模式仍不支持；真机相机外参仍仅支持 Piper。FR3 场景必须包含 `fr3_mount`，Piper 场景仍使用 `piper_mount`，参见 `docs/fr3.md`。
 
 ## Piper 真机 twin 镜像
 

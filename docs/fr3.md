@@ -12,7 +12,7 @@ FR3 启动时的七轴初始位姿与执行器目标均为 `[0, 0, 0, -1.57, 0, 
 <body name="fr3_mount" pos="0 0 0" quat="1 0 0 0"/>
 ```
 
-`pos` 必填，单位米；`quat` 是可选的 wxyz 四元数。FR3 的 `move-p` 位姿对应 `fr3_link7`，仿真相机使用模型中的 `d435i_check`。仿真深度是 MuJoCo 渲染深度，不等同于 D435i 物理测量。若有 USB RealSense，`robot_control --backend real camera` 仅采集相机，不控制机械臂。FR3 **真机运动控制未实现**。
+`pos` 必填，单位米；`quat` 是可选的 wxyz 四元数。FR3 的 `move-p` 位姿对应 `fr3_link7`；操作者已确认真机与仿真的末端坐标系语义相同。仿真相机使用模型中的 `d435i_check`。仿真深度是 MuJoCo 渲染深度，不等同于 D435i 物理测量。若有 USB RealSense，`robot_control --backend real camera --no-extrinsics` 仅采集相机，不控制机械臂。FR3 真机使用本地 pylibfranka 直连 FCI；相机真机外参尚未支持 FR3，运动尚未经过真机验证。
 
 Python 示例：
 

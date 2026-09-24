@@ -26,11 +26,11 @@ class PiperRobot:
             robot = selected
         if robot not in ("piper", "franka_fr3"):
             raise ValueError(f"unknown robot: {robot}; choose piper or franka_fr3")
-        if robot == "franka_fr3" and backend in ("real", "twin"):
-            raise BackendUnavailableError("FR3 real-robot control is not implemented; use --backend mujoco")
+        if robot == "franka_fr3" and backend == "twin":
+            raise BackendUnavailableError("FR3 twin is not implemented; use --backend real or mujoco")
         if config.get("scene") is not None and backend != "mujoco":
             raise ValueError("scene is only supported by the MuJoCo backend")
-        if backend in ("real", "twin"):
+        if backend in ("real", "twin") and robot == "piper":
             socket_path = config.pop("twin_socket_path", None)
             twin = SceneClient(socket_path=socket_path or twin_socket_path(), robot="piper")
             try:
@@ -93,7 +93,11 @@ class PiperRobot:
                     raise
             return cls(scene)
         elif backend == "real":
-            impl = RealBackend(**config)
+            if robot == "franka_fr3":
+                from ..backends.franka_direct import FrankaDirectBackend
+                impl = FrankaDirectBackend(**config)
+            else:
+                impl = RealBackend(**config)
         else:
             raise ValueError(f"unknown backend: {backend}")
         impl.connect()

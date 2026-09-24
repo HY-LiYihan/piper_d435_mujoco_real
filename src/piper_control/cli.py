@@ -22,9 +22,18 @@ def _robot_name(robot: str) -> str:
     return selected
 
 
-def _robot(backend: str, can_name: str, robot: str = "piper"):
-    return PiperRobot.connect(backend, {"can_name": can_name} if backend in ("real", "twin") else {},
+def _robot(backend: str, can_name: str, robot: str = "piper", **config):
+    options = {"can_name": can_name} if backend in ("real", "twin") and robot == "piper" else {}
+    return PiperRobot.connect(backend, {**options, **config},
                               robot=_robot_name(robot))
+
+
+def _confirm_franka(word: str, current: object, target: object) -> bool:
+    typer.echo(f"current: {current}\ntarget: {target}")
+    if input(f"Check clearance, then type {word} to execute: ").strip() != word:
+        typer.echo("Cancelled; no command sent.")
+        return False
+    return True
 
 
 def _active_robot() -> str | None:
@@ -61,11 +70,11 @@ def _selection(ctx: typer.Context, backend: str | None = None, robot: str | None
     explicit_robot = robot or global_robot
     if (selected_backend in ("real", "twin") and not camera and explicit_robot is None
             and not (selected_backend == "twin" and launch)):
-        raise typer.BadParameter("real-robot control requires --robot piper", param_hint="--robot")
+        raise typer.BadParameter("real-robot control requires --robot piper or franka_fr3", param_hint="--robot")
     selected_robot = (_robot_name(explicit_robot) if explicit_robot is not None else
                       "piper" if launch or selected_backend in ("real", "twin") else _active_robot() or "piper")
-    if selected_backend in ("real", "twin") and selected_robot == "franka_fr3":
-        raise typer.BadParameter("FR3 real-robot control is not implemented", param_hint="--robot")
+    if selected_backend == "twin" and selected_robot == "franka_fr3":
+        raise typer.BadParameter("FR3 twin is not implemented", param_hint="--robot")
     return selected_backend, selected_robot
 
 
@@ -217,17 +226,29 @@ def move_joints(
     j5: float = typer.Option(..., "--j5", help="Joint 5 in radians"),
     j6: float = typer.Option(..., "--j6", help="Joint 6 in radians"),
     j7: float | None = typer.Option(None, "--j7", help="Joint 7, required only for franka_fr3"),
-    backend: str | None = None, can_name: str = "can0", robot: str | None = None):
+    backend: str | None = None, can_name: str = "can0", robot: str | None = None,
+    duration: float | None = typer.Option(None, "--duration", help="FR3 real motion duration in seconds"),
+    degrees: bool = typer.Option(False, "--degrees", help="Interpret joint positions as degrees")):
     backend, selected = _selection(ctx, backend, robot)
     if selected == "franka_fr3" and j7 is None:
         raise typer.BadParameter("--j7 is required for franka_fr3", param_hint="--j7")
     if selected == "piper" and j7 is not None:
         raise typer.BadParameter("--j7 is only valid for franka_fr3", param_hint="--j7")
-    instance = _robot(backend, can_name, selected)
+    if duration is not None and (backend, selected) != ("real", "franka_fr3"):
+        raise typer.BadParameter("--duration is only supported for FR3 real motion")
+    joints = [j1, j2, j3, j4, j5, j6]
+    if j7 is not None:
+        joints.append(j7)
+    if degrees:
+        import math
+        joints = [math.radians(value) for value in joints]
+    options = {"motion_duration_s": duration} if duration is not None else {}
+    instance = _robot(backend, can_name, selected, **options)
     try:
-        joints = [j1, j2, j3, j4, j5, j6]
-        if j7 is not None:
-            joints.append(j7)
+        if (backend, selected) == ("real", "franka_fr3"):
+            preview = {"joints_rad": joints, "duration_s": instance._backend.motion_duration_s}
+            if not _confirm_franka("MOVE_JOINTS", instance.state().joints.positions.tolist(), preview):
+                return
         instance.move_joints(joints)
         if backend == "mujoco":
             instance.wait_until_idle()
@@ -244,9 +265,13 @@ def move_p(
            z: float = typer.Option(..., "--z", help="Z position in metres"),
            qw: float | None = typer.Option(None, "--qw"), qx: float | None = typer.Option(None, "--qx"),
            qy: float | None = typer.Option(None, "--qy"), qz: float | None = typer.Option(None, "--qz"),
-           backend: str | None = None, can_name: str = "can0", robot: str | None = None):
+           backend: str | None = None, can_name: str = "can0", robot: str | None = None,
+           duration: float | None = typer.Option(None, "--duration", help="FR3 real motion duration in seconds")):
     backend, robot = _selection(ctx, backend, robot)
-    instance = _robot(backend, can_name, robot)
+    if duration is not None and (backend, robot) != ("real", "franka_fr3"):
+        raise typer.BadParameter("--duration is only supported for FR3 real motion")
+    options = {"motion_duration_s": duration} if duration is not None else {}
+    instance = _robot(backend, can_name, robot, **options)
     try:
         quaternion = (qw, qx, qy, qz)
         if all(value is None for value in quaternion):
@@ -256,7 +281,12 @@ def move_p(
             quaternion = current.quaternion
         elif any(value is None for value in quaternion):
             raise typer.BadParameter("provide all four quaternion options or none")
-        instance.move_p(Pose((x, y, z), tuple(float(value) for value in quaternion)))
+        target = Pose((x, y, z), tuple(float(value) for value in quaternion))
+        if (backend, robot) == ("real", "franka_fr3"):
+            preview = {"pose": target, "duration_s": instance._backend.motion_duration_s}
+            if not _confirm_franka("MOVE_POSE", instance.state().pose, preview):
+                return
+        instance.move_p(target)
         if backend == "mujoco":
             instance.wait_until_idle()
         current = instance.state().pose
@@ -268,10 +298,18 @@ def move_p(
 
 @app.command()
 def gripper(ctx: typer.Context, width: float, effort: float | None = None, backend: str | None = None,
-            can_name: str = "can0", robot: str | None = None):
+            can_name: str = "can0", robot: str | None = None,
+            speed: float | None = typer.Option(None, "--speed", help="FR3 real gripper speed in m/s")):
     backend, robot = _selection(ctx, backend, robot)
-    instance = _robot(backend, can_name, robot)
+    if speed is not None and (backend, robot) != ("real", "franka_fr3"):
+        raise typer.BadParameter("--speed is only supported for FR3 real gripper")
+    options = {"gripper_speed_m_s": speed} if speed is not None else {}
+    instance = _robot(backend, can_name, robot, **options)
     try:
+        if (backend, robot) == ("real", "franka_fr3"):
+            preview = {"width_m": width, "speed_m_s": instance._backend.gripper_speed_m_s}
+            if not _confirm_franka("MOVE_GRIPPER", instance.state().joints.gripper, preview):
+                return
         instance.gripper(width, effort)
         if backend == "mujoco":
             instance.wait_until_idle()
@@ -349,7 +387,7 @@ def camera(ctx: typer.Context, backend: str | None = None, can_name: str = "can0
             if robot is None and ctx.obj.get("robot") is None:
                 raise typer.BadParameter("real camera extrinsics require --robot piper", param_hint="--robot")
             if selected != "piper":
-                raise typer.BadParameter("FR3 real-robot control is not implemented", param_hint="--robot")
+                raise typer.BadParameter("FR3 real camera extrinsics are not implemented; use --no-extrinsics", param_hint="--robot")
             instance = _robot("real", can_name, selected)
         from .sensors.realsense import RealSenseCamera
         cam = RealSenseCamera(frame_id="d435i_color_optical_frame")

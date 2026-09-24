@@ -21,8 +21,8 @@ def test_joint_count_and_real_backend_guard():
     assert JointState(np.zeros(7)).velocities.shape == (7,)
     with pytest.raises(ValueError, match="velocities"):
         JointState(np.zeros(7), np.zeros(6))
-    with pytest.raises(BackendUnavailableError, match="not implemented"):
-        PiperRobot.connect("real", robot="franka_fr3")
+    with pytest.raises(BackendUnavailableError, match="twin"):
+        PiperRobot.connect("twin", robot="franka_fr3")
 
 
 def test_robot_alias_and_distinct_sockets(monkeypatch):

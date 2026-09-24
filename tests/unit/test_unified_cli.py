@@ -89,9 +89,9 @@ def test_real_backend_requires_explicit_piper_without_touching_hardware(monkeypa
     missing = runner.invoke(app, ["--backend", "real", "state"])
     assert missing.exit_code == 2
     assert "requires --robot piper" in missing.output
-    unsupported = runner.invoke(app, ["--backend", "real", "--robot", "franka_fr3", "state"])
+    unsupported = runner.invoke(app, ["--backend", "twin", "--robot", "franka_fr3", "state"])
     assert unsupported.exit_code == 2
-    assert "not implemented" in unsupported.output
+    assert "twin is not implemented" in unsupported.output
 
 
 def test_command_global_options_and_conflicts(monkeypatch):
