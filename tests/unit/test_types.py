@@ -1,7 +1,14 @@
 import numpy as np
 import pytest
-from piper_control.api.types import JointState, Pose
-from piper_control.sensors.frame import CameraIntrinsics, RGBDFrame
+from robot_control import Robot
+from robot_control.api.robot import Robot as RobotFacade
+from robot_control.api.types import JointState, Pose
+from robot_control.sensors.frame import CameraIntrinsics, RGBDFrame
+
+
+def test_public_robot_name_is_shared_by_both_robot_types():
+    assert Robot is RobotFacade
+    assert Robot.connect.__defaults__[-1] == "piper"
 
 
 def test_pose_rejects_zero_quaternion():

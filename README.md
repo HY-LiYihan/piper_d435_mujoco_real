@@ -1,6 +1,6 @@
-# Piper + FR3 Control
+# Robot Control
 
-统一的 Piper / Franka FR3 Python API、MuJoCo 仿真、Piper 真机和 D435i RGB-D 接口。主命令为 `robot_control`；旧命令 `piper` 保留兼容。启动时不传 `--robot` 默认 Piper；`--robot franka_fr3` 启动七轴 FR3。`pepper` 也作为 Piper 的别名接受。
+统一的 Piper / Franka FR3 Python API、MuJoCo 仿真、真机和 D435i RGB-D 接口。发行包为 `robot-control`，Python 包和唯一命令为 `robot_control`，公共类为 `Robot`。启动时不传 `--robot` 默认 Piper；`--robot franka_fr3` 启动七轴 FR3。`pepper` 也作为 Piper 的机型别名接受。
 
 ## 上游版本
 
@@ -70,7 +70,7 @@ robot_control --backend real --robot franka_fr3 move-p --x 0.6 --y -0.1 --z 0.4 
 robot_control --backend real --robot franka_fr3 gripper 0.05 --speed 0.05
 ```
 
-以上仅为参数格式示例，**不是安全目标位姿**，不能直接照抄在真机执行。后端检查 Idle、错误、状态变化和末端旋转 10° 上限；没有实现 `command.md` 所称的每轴 0.1 rad 目标变化上限或笛卡尔避障。`stop` 是软件停止命令，不能代替实体急停。Python API 可使用 `PiperRobot.connect("real", robot="franka_fr3")`；API 调用不会弹出 CLI 确认提示，调用方应自行确认目标。FR3 的 twin 模式仍不支持；真机相机外参仍仅支持 Piper。FR3 场景必须包含 `fr3_mount`，Piper 场景仍使用 `piper_mount`，参见 `docs/fr3.md`。
+以上仅为参数格式示例，**不是安全目标位姿**，不能直接照抄在真机执行。后端检查 Idle、错误、状态变化和末端旋转 10° 上限；没有实现 `command.md` 所称的每轴 0.1 rad 目标变化上限或笛卡尔避障。`stop` 是软件停止命令，不能代替实体急停。Python API 可使用 `Robot.connect("real", robot="franka_fr3")`；API 调用不会弹出 CLI 确认提示，调用方应自行确认目标。FR3 的 twin 模式仍不支持；真机相机外参仍仅支持 Piper。FR3 场景必须包含 `fr3_mount`，Piper 场景仍使用 `piper_mount`，参见 `docs/fr3.md`。
 
 ## Piper 真机 twin 镜像
 
@@ -91,14 +91,14 @@ robot_control --backend real --robot piper pose
 robot_control --backend twin --robot piper state
 ```
 
-只要 twin GUI 在运行，同机 `--backend real` 会自动通过仅本机可访问的 twin socket 复用它的真机连接；`--backend twin` 的运动和状态命令必须有运行中的 twin，绝不回退为仿真控制。如果使用 `can1`，第二终端的命令也要加 `--can-name can1`（放在子命令之后）。Python API 的 `PiperRobot.connect("twin")` 同样复用该真机连接。窗口只同步真机测得的六轴关节角与可用的夹爪开口：不执行 MuJoCo 物理步进，不将窗口中的操作或仿真目标发送到真机。`camera` 仍读取**真机** RealSense，相机命令还需安装 `[camera]`。**注意：使用 `move-joints`、`gripper` 等控制命令会真实驱动机械臂；先检查现场安全。** 关闭窗口会断开 twin 的真机连接。该模式目前仅支持 Piper，尚未经过真实硬件验证。
+只要 twin GUI 在运行，同机 `--backend real` 会自动通过仅本机可访问的 twin socket 复用它的真机连接；`--backend twin` 的运动和状态命令必须有运行中的 twin，绝不回退为仿真控制。如果使用 `can1`，第二终端的命令也要加 `--can-name can1`（放在子命令之后）。Python API 的 `Robot.connect("twin")` 同样复用该真机连接。窗口只同步真机测得的六轴关节角与可用的夹爪开口：不执行 MuJoCo 物理步进，不将窗口中的操作或仿真目标发送到真机。`camera` 仍读取**真机** RealSense，相机命令还需安装 `[camera]`。**注意：使用 `move-joints`、`gripper` 等控制命令会真实驱动机械臂；先检查现场安全。** 关闭窗口会断开 twin 的真机连接。该模式目前仅支持 Piper，尚未经过真实硬件验证。
 
 ## 使用
 
 ```python
-from piper_control import PiperRobot
+from robot_control import Robot
 
-robot = PiperRobot.connect("mujoco")
+robot = Robot.connect("mujoco")
 robot.move_joints([0.2, 0.8, -1.2, 0.2, -0.3, 0.4])
 robot.wait_until_idle()
 target = robot.state().pose

@@ -6,11 +6,11 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
-from piper_control import PiperRobot
-from piper_control.api.types import Pose
-from piper_control.backends.franka_direct import FrankaDirectBackend
-from piper_control.cli import app
-from piper_control.errors import BackendUnavailableError
+from robot_control import Robot
+from robot_control.api.types import Pose
+from robot_control.backends.franka_direct import FrankaDirectBackend
+from robot_control.cli import app
+from robot_control.errors import BackendUnavailableError
 
 
 IDENTITY = [1.0, 0.0, 0.0, 0.0,
@@ -89,7 +89,7 @@ def bindings(monkeypatch):
 
 
 def test_direct_selection_and_state_are_passive(bindings):
-    instance = PiperRobot.connect("real", robot="franka_fr3", config={"rt_priority": 0})
+    instance = Robot.connect("real", robot="franka_fr3", config={"rt_priority": 0})
     try:
         backend = instance._backend
         assert isinstance(backend, FrankaDirectBackend)
@@ -144,4 +144,4 @@ def test_franka_real_cli_needs_confirmation(bindings):
 
 def test_franka_twin_remains_unavailable(bindings):
     with pytest.raises(BackendUnavailableError, match="twin"):
-        PiperRobot.connect("twin", robot="franka_fr3")
+        Robot.connect("twin", robot="franka_fr3")
